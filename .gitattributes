@@ -1,0 +1,16 @@
+# Git LFS 설정 (필요한 경우)
+# 대용량 파일을 Git LFS로 관리하려면 주석 해제
+
+# *.bin filter=lfs diff=lfs merge=lfs -text
+# *.png filter=lfs diff=lfs merge=lfs -text
+# *.pth filter=lfs diff=lfs merge=lfs -text
+
+# Python 파일 EOL 설정
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+

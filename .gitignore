@@ -1,0 +1,147 @@
+# ===== DVS 프로젝트 .gitignore =====
+
+# ===== 제외할 폴더 =====
+# embeddedsw 폴더 전체
+embeddedsw/
+
+# data 폴더 전체
+data/
+
+# 체크포인트 및 모델 파일 (용량이 큼)
+checkpoints*/
+*/checkpoints*/
+test_checkpoints/
+*/test_checkpoints/
+
+# 로그 파일
+logs/
+*/logs/
+
+# 결과 폴더 (선택적 - 필요시 주석 해제)
+# results/
+# */results/
+# analysis_results/
+# */analysis_results/
+# csv_results/
+# */csv_results/
+# outputs/
+# */outputs/
+# inference_results/
+# */inference_results/
+
+# ===== Python 관련 =====
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ===== DVS 데이터 파일 (큰 용량) =====
+# Binary 데이터 파일
+*.bin
+
+# 대용량 이미지 (선택적)
+# *.png
+# *.jpg
+# *.jpeg
+
+# ===== IDE 관련 =====
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ===== OS 관련 =====
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.directory
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ===== 임시 파일 =====
+*.swp
+*.swo
+*.tmp
+*.bak
+*.orig
+
+# ===== Git 관련 (서브모듈) =====
+# filter_sim의 기존 .git을 무시 (전체 저장소로 통합)
+filter_sim/.git/
+
