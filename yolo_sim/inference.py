@@ -9,8 +9,16 @@ import matplotlib.pyplot as plt
 import os
 from typing import List, Tuple, Optional
 
-from model import YOLOv3Tiny, decode_predictions, get_laser_center
-from dataset import LaserYOLODataset, load_frames_from_bin
+try:
+    # yolo_sim 디렉토리 내에서 실행할 때
+    from model import YOLOv3Tiny, decode_predictions, get_laser_center
+    from dataset import LaserYOLODataset, load_frames_from_bin
+    from utils import calculate_event_center_from_roi
+except ImportError:
+    # 상위 디렉토리에서 실행할 때
+    from yolo_sim.model import YOLOv3Tiny, decode_predictions, get_laser_center
+    from yolo_sim.dataset import LaserYOLODataset, load_frames_from_bin
+    from yolo_sim.utils import calculate_event_center_from_roi
 
 
 class LaserYOLOInference:
@@ -90,15 +98,20 @@ class LaserYOLOInference:
                 )
                 
                 # 중심점 추출
-                if boxes_list and len(boxes_list[0]) > 0:
+                # decode_predictions는 항상 batch_size만큼 반환 (빈 텐서 포함)
+                if len(boxes_list[0]) > 0:
                     center = get_laser_center(boxes_list[0], scores_list[0])
                     if center:
                         best_score = torch.max(scores_list[0]).item()
                         predictions.append((center[0], center[1], best_score))
                     else:
-                        predictions.append((0.5, 0.5, 0.0))  # 감지 실패
+                        # YOLO 감지 실패 시 이벤트 중심 계산
+                        event_center = calculate_event_center_from_roi(image[0].cpu().numpy())
+                        predictions.append((event_center[0], event_center[1], 0.0))  # confidence=0.0
                 else:
-                    predictions.append((0.5, 0.5, 0.0))  # 감지 실패
+                    # YOLO 감지 실패 시 이벤트 중심 계산
+                    event_center = calculate_event_center_from_roi(image[0].cpu().numpy())
+                    predictions.append((event_center[0], event_center[1], 0.0))  # confidence=0.0
         
         if return_targets:
             return predictions, targets

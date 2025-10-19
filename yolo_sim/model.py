@@ -128,26 +128,28 @@ def decode_predictions(predictions, anchors, num_classes=1, conf_threshold=0.5):
     # Confidence 필터링
     mask = conf > conf_threshold
     
-    # 결과 수집
+    # 결과 수집 (모든 batch에 대해 결과 반환, detection 없으면 빈 텐서)
     boxes_list = []
     scores_list = []
     
     for b in range(batch_size):
         valid_mask = mask[b]
         if valid_mask.sum() == 0:
-            continue
+            # Detection 없으면 빈 텐서 추가 (batch index 유지)
+            boxes_list.append(torch.empty((0, 4), device=predictions.device))
+            scores_list.append(torch.empty((0,), device=predictions.device))
+        else:
+            boxes = torch.stack([
+                x_center[b][valid_mask],
+                y_center[b][valid_mask],
+                box_w[b][valid_mask],
+                box_h[b][valid_mask]
+            ], dim=1)
             
-        boxes = torch.stack([
-            x_center[b][valid_mask],
-            y_center[b][valid_mask],
-            box_w[b][valid_mask],
-            box_h[b][valid_mask]
-        ], dim=1)
-        
-        scores = conf[b][valid_mask]
-        
-        boxes_list.append(boxes)
-        scores_list.append(scores)
+            scores = conf[b][valid_mask]
+            
+            boxes_list.append(boxes)
+            scores_list.append(scores)
     
     return boxes_list, scores_list
 

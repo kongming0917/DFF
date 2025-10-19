@@ -80,10 +80,7 @@ class LaserYOLODataset(Dataset):
             roi[dst_y:dst_y + copy_h, dst_x:dst_x + copy_w] = \
                 frame[y_start:y_start + copy_h, x_start:x_start + copy_w]
         
-        # 정규화
-        if np.max(roi) > 0:
-            roi = roi / np.max(roi)
-        
+        # 정규화는 load_frames_from_bin에서 이미 적용됨 (이중 정규화 방지)
         return roi
     
     def _create_bbox_label(self, shift_x: int, shift_y: int) -> Tuple[float, float, float, float]:
@@ -123,9 +120,11 @@ class LaserYOLODataset(Dataset):
         
         # Shift 결정
         if self.training:
+            # Training: 랜덤 shift
             shift_x = np.random.randint(-self.shift_range_x, self.shift_range_x + 1)
             shift_y = np.random.randint(-self.shift_range_y, self.shift_range_y + 1)
         else:
+            # Validation: deterministic shift (재현 가능)
             rng = np.random.RandomState(self.validation_seed + idx)
             shift_x = rng.randint(-self.shift_range_x, self.shift_range_x + 1)
             shift_y = rng.randint(-self.shift_range_y, self.shift_range_y + 1)

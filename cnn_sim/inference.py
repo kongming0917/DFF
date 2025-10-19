@@ -127,7 +127,7 @@ class DVSInference:
     
     def predict_from_frames(self, individual_frames: List[np.ndarray], 
                           roi_size: Tuple[int, int] = (512, 512),
-                          test_augmentation: bool = True) -> Dict[str, Any]:
+                          test_augmentation: bool = False) -> Dict[str, Any]:
         """프레임 리스트에서 추론"""
         print(f"🔮 Creating dataset for inference...")
         
@@ -160,6 +160,7 @@ class DVSInference:
         predictions = []
         times = []
         errors = []
+    
         
         for i in range(len(dataset)):
             sample_input, sample_label = dataset[i]

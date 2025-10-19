@@ -16,8 +16,16 @@ import matplotlib.pyplot as plt
 from typing import Dict, List
 from datetime import datetime
 
-from model import YOLOv3Tiny, decode_predictions, get_laser_center
-from dataset import create_train_val_loaders, load_frames_from_bin
+try:
+    # yolo_sim 디렉토리 내에서 실행할 때
+    from model import YOLOv3Tiny, decode_predictions, get_laser_center
+    from dataset import create_train_val_loaders, load_frames_from_bin
+    from utils import calculate_event_center_from_roi
+except ImportError:
+    # 상위 디렉토리에서 실행할 때
+    from yolo_sim.model import YOLOv3Tiny, decode_predictions, get_laser_center
+    from yolo_sim.dataset import create_train_val_loaders, load_frames_from_bin
+    from yolo_sim.utils import calculate_event_center_from_roi
 
 
 class YOLOLoss(nn.Module):
@@ -492,6 +500,8 @@ def train_yolo(
         val_predictions = []
         val_targets = []
         
+        last_successful_center = (0.5, 0.5)
+        
         with torch.no_grad():
             for images, targets in val_loader:
                 images = images.to(device)
@@ -502,19 +512,26 @@ def train_yolo(
                 val_loss += loss.item()
                 
                 # 중심점 정확도 계산
-                boxes_list, scores_list = decode_predictions(outputs, anchors, conf_threshold=0.3)
+                boxes_list, scores_list = decode_predictions(outputs, anchors, conf_threshold=0.4)
                 for i, (boxes, scores) in enumerate(zip(boxes_list, scores_list)):
                     target_center = (targets[i, 0].item(), targets[i, 1].item())
                     val_targets.append(target_center)
                     
                     pred_center = get_laser_center(boxes, scores) if len(boxes) > 0 else None
-                    if pred_center:
-                        val_predictions.append(pred_center)
-                        pixel_error = np.sqrt(((np.array(pred_center) - np.array(target_center)) * 512) ** 2).sum()
-                        pixel_errors.append(pixel_error)
+                    
+                    if pred_center is None:
+                        # YOLO 감지 실패 시 이벤트 중심 계산
+                        event_center = calculate_event_center_from_roi(images[i].cpu().numpy())
+                        final_center = event_center
                     else:
-                        val_predictions.append((0.5, 0.5))
-                        pixel_errors.append(999.0)
+                        # 성공: 현재 좌표 사용 및 마지막 위치 업데이트
+                        final_center = pred_center
+                        last_successful_center = pred_center
+                    
+                    val_predictions.append(final_center)
+                    pixel_error = np.sqrt(((np.array(final_center) - np.array(target_center)) * 512) ** 2).sum()
+                    pixel_errors.append(pixel_error)
+                    
         
         val_loss /= len(val_loader)
         avg_pixel_error = np.mean(pixel_errors) if pixel_errors else 999.0
@@ -578,7 +595,7 @@ if __name__ == "__main__":
     train_yolo(
         model_name='yolo_tiny_laser',
         max_frames=500,
-        num_epochs=30,
+        num_epochs=50,
         batch_size=4,
         lr=0.001
     )

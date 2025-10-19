@@ -119,10 +119,7 @@ class DVSFixedGTDataset(Dataset):
             roi[dst_y:dst_y + copy_h, dst_x:dst_x + copy_w] = \
                 frame[y_start:y_start + copy_h, x_start:x_start + copy_w]
         
-        # 정규화 (0-1 범위)
-        if np.max(roi) > 0:
-            roi = roi / np.max(roi)
-        
+        # 정규화는 train.py에서 이미 적용됨 (이중 정규화 방지)
         return roi
     
     def _calculate_relative_label(self, shift_x: int, shift_y: int) -> Tuple[float, float]:
