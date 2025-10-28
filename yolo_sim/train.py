@@ -477,8 +477,10 @@ def train_yolo(
     for epoch in range(num_epochs):
         # 훈련
         model.train()
-        train_loss = 0.0
-        
+
+        # 데이터셋을 학습 모드(증강 ON)로 설정
+        train_loader.dataset.dataset.set_training_mode(True) 
+        train_loss = 0.0        
         for images, targets in train_loader:
             images = images.to(device)
             targets = targets.to(device)
@@ -495,6 +497,8 @@ def train_yolo(
         
         # 검증
         model.eval()
+        # 데이터셋을 평가 모드(증강 OFF)로 설정
+        val_loader.dataset.dataset.set_training_mode(False)
         val_loss = 0.0
         pixel_errors = []
         val_predictions = []

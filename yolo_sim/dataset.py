@@ -124,10 +124,8 @@ class LaserYOLODataset(Dataset):
             shift_x = np.random.randint(-self.shift_range_x, self.shift_range_x + 1)
             shift_y = np.random.randint(-self.shift_range_y, self.shift_range_y + 1)
         else:
-            # Validation: deterministic shift (재현 가능)
-            rng = np.random.RandomState(self.validation_seed + idx)
-            shift_x = rng.randint(-self.shift_range_x, self.shift_range_x + 1)
-            shift_y = rng.randint(-self.shift_range_y, self.shift_range_y + 1)
+            shift_x = 0
+            shift_y = 0
         
         # ROI 추출
         multi_frame_rois = []

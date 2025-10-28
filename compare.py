@@ -408,10 +408,115 @@ def compare_methods(
         fontsize=16, fontweight='bold', y=0.98
     )
     
-    # 저장
+    # 저장 (전체 버전)
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✅ Comparison plot saved to: {save_path}")
+        print(f"✅ Full comparison plot saved to: {save_path}")
+    
+    plt.show()
+    
+    # ========================================
+    # 두 번째 이미지: 간소화 버전 (6개 그래프만)
+    # ========================================
+    print("\n📊 Creating compact comparison visualization (6 plots)...")
+    
+    fig2 = plt.figure(figsize=(18, 10))
+    gs2 = fig2.add_gridspec(2, 3, hspace=0.3, wspace=0.3)
+    
+    # ========== 1. X 좌표 분포도 비교 ==========
+    ax1 = fig2.add_subplot(gs2[0, 0])
+    sns.kdeplot(data=cnn_x_errors, ax=ax1, label='CNN', color='blue', alpha=0.7, linewidth=2)
+    sns.kdeplot(data=yolo_x_errors, ax=ax1, label='YOLO', color='green', alpha=0.7, linewidth=2)
+    sns.kdeplot(data=filter_x_errors, ax=ax1, label='Filter', color='red', alpha=0.7, linewidth=2)
+    ax1.axvline(0, color='black', linestyle='--', alpha=0.5, linewidth=2, label='Perfect')
+    ax1.set_xlabel('X Coordinate Error (True - Predicted)', fontsize=11)
+    ax1.set_ylabel('Density', fontsize=11)
+    ax1.set_title('X Coordinate Error Distribution', fontsize=12, fontweight='bold')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # ========== 2. Y 좌표 분포도 비교 ==========
+    ax2 = fig2.add_subplot(gs2[0, 1])
+    sns.kdeplot(data=cnn_y_errors, ax=ax2, label='CNN', color='blue', alpha=0.7, linewidth=2)
+    sns.kdeplot(data=yolo_y_errors, ax=ax2, label='YOLO', color='green', alpha=0.7, linewidth=2)
+    sns.kdeplot(data=filter_y_errors, ax=ax2, label='Filter', color='red', alpha=0.7, linewidth=2)
+    ax2.axvline(0, color='black', linestyle='--', alpha=0.5, linewidth=2, label='Perfect')
+    ax2.set_xlabel('Y Coordinate Error (True - Predicted)', fontsize=11)
+    ax2.set_ylabel('Density', fontsize=11)
+    ax2.set_title('Y Coordinate Error Distribution', fontsize=12, fontweight='bold')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # ========== 3. 오차 분포 히스토그램 ==========
+    ax3 = fig2.add_subplot(gs2[0, 2])
+    ax3.hist(cnn_errors, bins=30, alpha=0.6, label='CNN', color='blue', edgecolor='navy')
+    ax3.hist(yolo_errors, bins=30, alpha=0.6, label='YOLO', color='green', edgecolor='darkgreen')
+    ax3.hist(filter_errors, bins=30, alpha=0.6, label='Filter', color='red', edgecolor='darkred')
+    ax3.axvline(np.mean(cnn_errors), color='blue', linestyle='--', linewidth=2, 
+               label=f'CNN Mean: {np.mean(cnn_errors):.2f}')
+    ax3.axvline(np.mean(yolo_errors), color='green', linestyle='--', linewidth=2, 
+               label=f'YOLO Mean: {np.mean(yolo_errors):.2f}')
+    ax3.axvline(np.mean(filter_errors), color='red', linestyle='--', linewidth=2, 
+               label=f'Filter Mean: {np.mean(filter_errors):.2f}')
+    ax3.set_xlabel('Pixel Error', fontsize=11)
+    ax3.set_ylabel('Frequency', fontsize=11)
+    ax3.set_title('Error Distribution Comparison', fontsize=12, fontweight='bold')
+    ax3.legend(fontsize=9)
+    ax3.grid(True, alpha=0.3)
+    
+    # ========== 4. 2D 궤적 비교 (X-Y 평면) ==========
+    ax4 = fig2.add_subplot(gs2[1, 0])
+    ax4.scatter(cnn_pred[:, 0], cnn_pred[:, 1], 
+               alpha=0.6, s=40, label='CNN', c='blue', edgecolors='navy')
+    ax4.scatter(yolo_pred[:, 0], yolo_pred[:, 1], 
+               alpha=0.6, s=40, label='YOLO', c='green', edgecolors='darkgreen')
+    ax4.scatter(filter_pred[:, 0], filter_pred[:, 1], 
+               alpha=0.6, s=40, label='Filter', c='red', edgecolors='darkred')
+    ax4.scatter(true_center_x, true_center_y, 
+               s=200, marker='*', c='gold', edgecolors='black', 
+               linewidths=2, label='True Center', zorder=10)
+    ax4.set_xlabel('X Coordinate', fontsize=11)
+    ax4.set_ylabel('Y Coordinate', fontsize=11)
+    ax4.set_title('2D Trajectory Comparison', fontsize=12, fontweight='bold')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    
+    # ========== 5. 오차 박스플롯 ==========
+    ax5 = fig2.add_subplot(gs2[1, 1])
+    box_data = [cnn_errors, yolo_errors, filter_errors]
+    box = ax5.boxplot(box_data, labels=['CNN', 'YOLO', 'Filter'], patch_artist=True)
+    colors = ['lightblue', 'lightgreen', 'lightcoral']
+    for patch, color in zip(box['boxes'], colors):
+        patch.set_facecolor(color)
+    ax5.set_ylabel('Pixel Error', fontsize=11)
+    ax5.set_title('Error Distribution (Box Plot)', fontsize=12, fontweight='bold')
+    ax5.grid(True, alpha=0.3, axis='y')
+    
+    # ========== 6. 누적 분포 함수 (CDF) ==========
+    ax6 = fig2.add_subplot(gs2[1, 2])
+    ax6.plot(cnn_sorted, cnn_cdf, label='CNN', color='blue', linewidth=2)
+    ax6.plot(yolo_sorted, yolo_cdf, label='YOLO', color='green', linewidth=2)
+    ax6.plot(filter_sorted, filter_cdf, label='Filter', color='red', linewidth=2)
+    ax6.set_xlabel('Pixel Error', fontsize=11)
+    ax6.set_ylabel('Cumulative Probability', fontsize=11)
+    ax6.set_title('Cumulative Distribution Function', fontsize=12, fontweight='bold')
+    ax6.legend()
+    ax6.grid(True, alpha=0.3)
+    
+    # ========== 전체 제목 (간소화 버전) ==========
+    fig2.suptitle(
+        f'CNN vs YOLO vs Filter Comparison (Compact)\n'
+        f'CNN: {np.mean(cnn_errors):.2f}±{np.std(cnn_errors):.2f} px | '
+        f'YOLO: {np.mean(yolo_errors):.2f}±{np.std(yolo_errors):.2f} px | '
+        f'Filter: {np.mean(filter_errors):.2f}±{np.std(filter_errors):.2f} px',
+        fontsize=16, fontweight='bold', y=0.98
+    )
+    
+    # 저장 (간소화 버전)
+    if save_path:
+        compact_save_path = save_path.replace('.png', '_compact.png')
+        plt.savefig(compact_save_path, dpi=300, bbox_inches='tight')
+        print(f"✅ Compact comparison plot saved to: {compact_save_path}")
     
     plt.show()
     
@@ -495,24 +600,26 @@ def main():
         checkpoint_path=yolo_checkpoint,
         bin_file_path=bin_file,
         max_frames=50,
-        conf_threshold=0.5
+        conf_threshold=0.3
     )
     
     # Filter 결과 로드
     filter_results = load_filter_predictions(filter_csv)
     
-    # 샘플 수 맞추기 (더 적은 쪽에 맞춤)
+    # 샘플 수 맞추기 및 마지막 3개 제외 (temporal window 경계 문제 방지)
     min_samples = min(len(cnn_results['predictions']), 
                      len(yolo_results['predictions']), 
                      len(filter_results['predictions']))
-    cnn_results['predictions'] = cnn_results['predictions'][:min_samples]
-    cnn_results['targets'] = cnn_results['targets'][:min_samples]
-    yolo_results['predictions'] = yolo_results['predictions'][:min_samples]
-    yolo_results['targets'] = yolo_results['targets'][:min_samples]
-    filter_results['predictions'] = filter_results['predictions'][:min_samples]
-    filter_results['targets'] = filter_results['targets'][:min_samples]
+    safe_samples = min_samples - 3  # 마지막 3개 제외 (안전 마진)
     
-    print(f"\n📊 Using {min_samples} samples for comparison")
+    cnn_results['predictions'] = cnn_results['predictions'][:safe_samples]
+    cnn_results['targets'] = cnn_results['targets'][:safe_samples]
+    yolo_results['predictions'] = yolo_results['predictions'][:safe_samples]
+    yolo_results['targets'] = yolo_results['targets'][:safe_samples]
+    filter_results['predictions'] = filter_results['predictions'][:safe_samples]
+    filter_results['targets'] = filter_results['targets'][:safe_samples]
+    
+    print(f"\n📊 Using {safe_samples} samples for comparison (excluded last 3 for stability)")
     
     # 비교 시각화
     compare_methods(cnn_results, yolo_results, filter_results, save_path=output_path)
