@@ -32,3 +32,4 @@ dependencies:
   - pip
   - pip:
     - scikit-learn>=1.0.0
+    - filterpy>=1.4.5  # Kalman filter for KalmanPointExtractor

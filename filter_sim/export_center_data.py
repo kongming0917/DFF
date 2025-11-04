@@ -14,7 +14,7 @@ import sys
 from typing import List, Optional, Tuple
 import time
 from dvs_filter import (
-    BinProcessor, SpatialClusterFilter, DVSFrame, 
+    FilterableBinProcessor, SpatialClusterFilter, DVSFrame, 
     MedianPointExtractor, TemporalAveragePointExtractor, KalmanPointExtractor
 )
 
@@ -68,7 +68,7 @@ def extract_all_center_points(
     """
     # 기본 설정
     width, height = 960, 720
-    processor = BinProcessor(width, height, has_header=True)
+    processor = FilterableBinProcessor(width, height, has_header=True)
     
     if point_extractor is None:
         point_extractor = MedianPointExtractor()

@@ -169,9 +169,11 @@ class DVSFixedGTDataset(Dataset):
         else:
             # 검증 시: 랜덤 shift (재현성을 위해 idx 기반 시드 사용)
             # 매 에폭마다 동일한 shift 패턴 유지
-            rng = np.random.RandomState(self.validation_seed + idx)
-            shift_x = rng.randint(-self.shift_range_x, self.shift_range_x + 1)
-            shift_y = rng.randint(-self.shift_range_y, self.shift_range_y + 1)
+            # rng = np.random.RandomState(self.validation_seed + idx)
+            # shift_x = rng.randint(-self.shift_range_x, self.shift_range_x + 1)
+            # shift_y = rng.randint(-self.shift_range_y, self.shift_range_y + 1)
+            shift_x = 0
+            shift_y = 0
         
         # 다중 프레임에서 ROI 추출 (동일한 shift 적용)
         multi_frame_rois = []

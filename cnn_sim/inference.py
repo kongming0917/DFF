@@ -9,12 +9,15 @@ import os
 import sys
 from typing import List, Tuple, Dict, Any
 
-# 상위 디렉토리 모듈 import
-sys.path.append('/hai/home/jdj/dvs/filter_sim')
+# 상위 디렉토리를 sys.path에 추가 (lib 모듈 사용을 위해)
+dvs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if dvs_root not in sys.path:
+    sys.path.insert(0, dvs_root)
 
+# 상위 디렉토리 모듈 import
 from model import get_model
 from dataset import DVSFixedGTDataset
-from dvs_filter import BinProcessor
+from lib.bin_processor import BinProcessor
 from utils import visualize_predictions
 
 class DVSInference:
@@ -44,7 +47,14 @@ class DVSInference:
         
         # 첫 번째 conv 레이어에서 입력 채널 수 추출 (다양한 모델 지원)
         input_channels = None
-        conv_patterns = ['conv1.weight', 'features.0.weight', 'conv.weight', 'conv1.conv.weight']
+        conv_patterns = [
+            'conv1.weight',                    # BasicCNN
+            'features.0.weight',              # 일반적인 경우
+            'backbone.features.0.0.weight',   # MobileNetV2
+            'features.0.0.weight',            # 일반화 버전
+            'conv.weight', 
+            'conv1.conv.weight'
+        ]
         
         for pattern in conv_patterns:
             for key in checkpoint['model_state_dict'].keys():

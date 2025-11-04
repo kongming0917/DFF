@@ -9,7 +9,14 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from typing import List, Tuple, Optional
 import sys
-sys.path.append('/hai/home/jdj/dvs/filter_sim')
+
+# yolo_sim/dataset.py 상단에 추가
+import os
+
+# 상위 디렉토리를 sys.path에 추가 (lib 모듈 사용을 위해)
+dvs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if dvs_root not in sys.path:
+    sys.path.insert(0, dvs_root)
 
 
 class LaserYOLODataset(Dataset):
@@ -203,7 +210,7 @@ def load_frames_from_bin(bin_file_path: str, max_frames: Optional[int] = None) -
     print(f"📖 Loading frames from {bin_file_path}")
     
     try:
-        from dvs_filter import BinProcessor
+        from lib.bin_processor import BinProcessor
         
         processor = BinProcessor(960, 720, has_header=True)
         frames_data = processor.read_frames(bin_file_path, max_frames=max_frames or 200)

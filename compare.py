@@ -17,12 +17,13 @@ import sys
 from typing import Dict, Tuple, Optional
 
 # 경로 추가
+sys.path.append('/hai/home/jdj/dvs')  # lib 모듈 사용을 위해 루트 추가
 sys.path.append('/hai/home/jdj/dvs/cnn_sim')
 sys.path.append('/hai/home/jdj/dvs/filter_sim')
 sys.path.append('/hai/home/jdj/dvs/yolo_sim')
 
 from cnn_sim.inference import DVSInference
-from filter_sim.dvs_filter import BinProcessor
+from lib.bin_processor import BinProcessor  # lib에서 가져오기
 from yolo_sim.inference import LaserYOLOInference
 from yolo_sim.dataset import load_frames_from_bin as yolo_load_frames
 

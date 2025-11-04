@@ -45,7 +45,7 @@ dvs/
 - 복잡한 패턴 인식 어려움
 - 수동 파라미터 튜닝 필요
 
-**성능**: 평균 오차 ~10-20px (960×720 해상도 기준)
+**성능**: 평균 오차 ~10px (960×720 해상도 기준)
 
 📖 자세한 내용: [filter_sim/README.md](filter_sim/README.md)
 
@@ -130,21 +130,16 @@ dvs/
 
 ### 정확도 비교
 
-| 방법 | 평균 오차 (px) | Acc@5px | Acc@10px | 처리 속도 |
-|------|----------------|---------|----------|----------|
-| **Filter (Kalman)** | 10-20 | ~40-60% | ~70-80% | ⚡⚡⚡⚡⚡ |
-| **CNN (MobileNetV2)** | 3-5 | ~85-95% | ~95-99% | ⚡⚡⚡ |
-| **YOLO (Tiny)** | 4-7 | ~80-90% | ~90-95% | ⚡⚡ |
+> ⚠️ **정량적 성능은 지속적으로 개선 중입니다.**
+> 최신 결과는 각 폴더의 `checkpoints/`, `logs/` 및 시각화 파일을 참조하세요.
 
-### 장단점 종합
+### 특성 비교
 
-| 구분 | Filter | CNN | YOLO |
-|------|--------|-----|------|
-| **정확도** | ⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
-| **속도** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ |
-| **FPGA 구현** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ |
-| **노이즈 강건성** | ⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
-| **확장성** | ⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| 방법 | 정확도 | 처리 속도 | FPGA 구현 | 노이즈 강건성 | 확장성 |
+|------|--------|----------|-----------|--------------|--------|
+| **Filter** | 낮음 | ⚡⚡⚡⚡⚡ | ⭐⭐⭐⭐⭐ | 낮음 | 낮음 |
+| **CNN** | 높음 | ⚡⚡⚡ | ⭐⭐⭐⭐ | 높음 | 보통 |
+| **YOLO** | 개선 중 | ⚡⚡ | ⭐⭐ | 높음 | 높음 |
 
 ### 추천 사용 사례
 
@@ -161,7 +156,7 @@ dvs/
 ```bash
 # Conda 환경 생성
 conda env create -f environment.yml
-conda activate dvs
+conda activate dvs_project
 
 # 또는 pip 사용
 pip install -r requirements.txt
@@ -181,28 +176,19 @@ data/
 - 해상도: 960×720
 - 프레임 헤더: 8-byte (timestamp + frame_number)
 - 이벤트 타입: 0=no_event, 1=ON_event, 2=OFF_event
+- 고정된 레이저 좌표
 
 ### 실행 예시
 
-#### 1. Filter 방식 실행
-
 ```bash
-cd filter_sim
-python test.py
-```
+# Filter 방식
+cd filter_sim && python test.py
 
-#### 2. CNN 모델 학습
+# CNN 학습
+cd cnn_sim && python train.py
 
-```bash
-cd cnn_sim
-python train.py
-```
-
-#### 3. YOLO 모델 학습
-
-```bash
-cd yolo_sim
-python train.py
+# YOLO 학습
+cd yolo_sim && python train.py
 ```
 
 ---
@@ -211,21 +197,10 @@ python train.py
 
 ### CNN vs Filter 비교
 
-![CNN vs Filter Comparison](cnn_vs_filter_comparison.png)
-
-**주요 발견**:
-- CNN이 Filter 대비 **평균 오차 50-70% 감소**
-- CNN의 **안정성이 2-3배 향상** (표준편차 기준)
-- Filter는 **처리 속도에서 5-10배 우위**
-
-### 최고 성능 모델
-
-- **모델**: MobileNetV2-Light (cnn_sim)
-- **평균 오차**: 3.2±1.8 px
-- **Acc@5px**: 92.3%
-- **Acc@10px**: 98.1%
-- **추론 속도**: ~20-30 FPS (CPU), ~100-200 FPS (GPU)
-
+최신 성능 결과는 다음을 참조하세요:
+- 📊 `cnn_yolo_filter_comparison.png` - 시각화된 비교 차트
+- 📁 각 폴더의 `checkpoints/` - 모델 체크포인트 (파일명에 성능 포함)
+- 📝 각 폴더의 `logs/` - 학습 로그 및 상세 결과
 ---
 
 ## 🔧 FPGA 구현 고려사항

@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import os
+import sys
 import time
 import json
 from typing import Dict, List, Tuple, Optional
@@ -18,6 +19,13 @@ if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
     matplotlib.use('Agg')  # GUI 없는 환경에서만 Agg 사용
 import matplotlib.pyplot as plt
 
+# dvs_root 계산 및 sys.path 설정 (모듈 레벨에서 한 번만)
+dvs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if dvs_root not in sys.path:
+    sys.path.insert(0, dvs_root)
+
+# 공통 모듈 import
+from lib.bin_processor import BinProcessor
 from model import get_model, count_parameters
 from dataset import create_train_val_loaders
 from utils import EarlyStopping, ModelCheckpoint, MetricsTracker, visualize_predictions
@@ -416,9 +424,7 @@ def load_events_from_bin(bin_file_path: str, max_events: Optional[int] = None) -
     
     try:
         # 실제 DVS bin 파일 로딩
-        import sys
-        sys.path.append('/hai/home/jdj/dvs/filter_sim')
-        from dvs_filter import BinProcessor
+        # BinProcessor는 모듈 레벨에서 이미 import됨
         
         # BinProcessor 사용하여 이벤트 로드 (메모리 최적화)
         processor = BinProcessor(960, 720, has_header=True)
@@ -479,9 +485,7 @@ def load_individual_frames_from_bin(bin_file_path: str, max_frames: Optional[int
     
     try:
         # 실제 DVS bin 파일 로딩
-        import sys
-        sys.path.append('/hai/home/jdj/dvs/filter_sim')
-        from dvs_filter import BinProcessor
+        # BinProcessor는 모듈 레벨에서 이미 import됨
         
         # BinProcessor 사용하여 프레임 로드
         processor = BinProcessor(960, 720, has_header=True)
@@ -636,86 +640,9 @@ if __name__ == "__main__":
     else:
         print(f"✅ DVS 데이터 파일 확인: {BIN_FILE_PATH}")
     
-    # 학습 설정 선택 (basic 모델만)
-    training_configs = {
-        "ultra_fast": {
-            'model_name': 'basic',
-            'max_frames': 80,         # 빠른 테스트 (80 프레임 → 76 샘플)
-            'temporal_window': 5,
-            'num_epochs': 20,
-            'batch_size': 4,
-            'patience': 8,
-            'roi_size': (512, 512),
-            'shift_range_x': 50,      # 안전한 범위로 조정 (레이저 직경 400px 고려)
-            'shift_range_y': 50,
-            'description': '빠른 테스트 (basic, 80 frames, 20 epochs)'
-        },
-        
-        "single_frame": {
-            'model_name': 'basic',
-            'max_frames': 1000,        # 단일 프레임 테스트 (1000 프레임)
-            'temporal_window': 1,     # 개별 프레임만 사용!
-            'num_epochs': 30,
-            'batch_size': 8,
-            'patience': 10,
-            'roi_size': (512, 512),
-            'shift_range_x': 50,      # 안전한 범위로 조정
-            'shift_range_y': 50,
-            'description': '단일 프레임 (basic, 1000 frames, temporal=1)'
-        },
-        
-        "standard": {
-            'model_name': 'basic',
-            'max_frames': 500,        
-            'temporal_window': 5,
-            'num_epochs': 50,
-            'batch_size': 4,
-            'patience': 15,
-            'roi_size': (512, 512),
-            'shift_range_x': 50,      # 안전한 범위로 조정
-            'shift_range_y': 50,
-            'description': '표준 학습 (basic, 500 frames, temporal=5, epochs=50)'
-        },
-        
-        "mobilenet_v2": {
-            'model_name': 'mobilenet_v2',
-            'max_frames': 300,        
-            'temporal_window': 5,     # MobileNetV2도 temporal 데이터 사용
-            'num_epochs': 40,
-            'batch_size': 6,          # temporal 채널로 인해 배치 크기 조정
-            'patience': 12,
-            'roi_size': (512, 512),
-            'shift_range_x': 50,      # 안전한 범위로 조정
-            'shift_range_y': 50,
-            'description': 'MobileNetV2 기반 학습 (300 frames, temporal=5, epochs=40)'
-        },
-        
-        "mobilenet_v2_light": {
-            'model_name': 'mobilenet_v2_light',
-            'max_frames': 400,        
-            'temporal_window': 5,     # 경량 모델도 temporal 데이터 사용
-            'num_epochs': 35,
-            'batch_size': 8,          # temporal 채널로 인해 배치 크기 조정
-            'patience': 10,
-            'roi_size': (512, 512),
-            'shift_range_x': 50,      # 안전한 범위로 조정
-            'shift_range_y': 50,
-            'description': '경량 MobileNetV2 학습 (400 frames, temporal=5, epochs=35)'
-        },
-        
-        "mobilenet_v2_single": {
-            'model_name': 'mobilenet_v2',
-            'max_frames': 500,        
-            'temporal_window': 1,     # 단일 프레임 버전
-            'num_epochs': 30,
-            'batch_size': 12,         # 단일 프레임이므로 더 큰 배치 크기
-            'patience': 8,
-            'roi_size': (512, 512),
-            'shift_range_x': 50,      # 안전한 범위로 조정
-            'shift_range_y': 50,
-            'description': 'MobileNetV2 단일 프레임 학습 (500 frames, temporal=1, epochs=30)'
-        }
-    }
+    # 학습 설정 선택 (config.py에서 가져옴)
+    from config import get_training_mode_configs
+    training_configs = get_training_mode_configs()
     
     # 사용자 선택
     print("\n🔧 학습 모드를 선택하세요:")
@@ -729,7 +656,8 @@ if __name__ == "__main__":
             choice = "2"
             print(f"\n자동 선택: 2 (single_frame)")
         else:
-            choice = input(f"\n선택 (1-3, 기본값 2): ").strip() or "2"
+            num_modes = len(training_configs)
+            choice = input(f"\n선택 (1-{num_modes}, 기본값 2): ").strip() or "2"
         
         config_keys = list(training_configs.keys())
         selected_key = config_keys[int(choice) - 1]
@@ -775,7 +703,7 @@ if __name__ == "__main__":
         # 다음 단계 안내
         print(f"\n💡 다음 단계:")
         print(f"   1. 추론 테스트: python inference.py")
-        print(f"   2. 데모 실행: python example.py")
+        print(f"   2. 데이터 증강 확인: python debug_augmentation.py")
         print(f"   3. 다른 모델과 비교: 다시 실행하여 다른 모델 선택")
         
     except KeyboardInterrupt:

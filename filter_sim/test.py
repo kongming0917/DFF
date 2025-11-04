@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from typing import List, Tuple, Optional, Dict
 from dataclasses import dataclass
 from dvs_filter import (
-    BinProcessor, FrameFilter, EventDensityFilter, SpatialClusterFilter, 
+    FilterableBinProcessor, FrameFilter, EventDensityFilter, SpatialClusterFilter, 
     TimeRangeFilter, ROIFilter, DVSFrame,
     KalmanPointExtractor, MeanPointExtractor, MedianPointExtractor, CenterPointExtractor,
     TemporalAveragePointExtractor
@@ -81,8 +81,8 @@ def unified_filter(config: FilteringConfig) -> Tuple[List[DVSFrame], List[DVSFra
             print(f"📂 Loading file: {bin_file_path}")
             print(f"   Resolution: {width}×{height}")
     
-    # 2. BinProcessor 생성
-    processor = BinProcessor(width, height, has_header=config.has_header)
+    # 2. FilterableBinProcessor 생성
+    processor = FilterableBinProcessor(width, height, has_header=config.has_header)
     
     # 3. Read frames
     if config.verbose:

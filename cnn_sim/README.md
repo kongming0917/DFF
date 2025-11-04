@@ -25,109 +25,168 @@ Fixed Ground Truth 방식과 ROI 기반 처리를 통해 효율성과 정확성�
 ## 🌟 주요 혁신점
 
 - **⚡ Fixed Ground Truth**: 실시간 필터링 제거로 처리 속도 5-10배 향상
-- **🎯 ROI 기반 처리**: 메모리 사용량 99% 감소 (960×720 → 64×64)
-- **🤖 5가지 CNN 아키텍처**: 용도별 최적화된 모델 (FPGA 배포 지원)
+- **🎯 ROI 기반 처리**: 메모리 사용량 99% 감소 (960×720 → 512×512)
+- **🤖 3가지 CNN 아키텍처**: 용도별 최적화된 모델
 - **📊 효율적 데이터 파이프라인**: MedianPointExtractor 등 실시간 연산 완전 제거
+- **⏱️ Temporal Window**: 다중 프레임을 활용한 시간적 정보 활용
 
 ## 📁 프로젝트 구조
 
 ```
 dvs/cnn_sim/
-├── 🤖 model.py          # CNN 모델 정의 (5가지 아키텍처)
-├── 📊 dataset.py        # 데이터 처리 및 Fixed GT 파이프라인
-├── 🎓 train.py          # 모델 훈련 시스템
-├── 🔮 inference.py      # 모델 추론 및 성능 평가
-├── 🛠️ utils.py          # 유틸리티 함수들
-├── ⚙️ config.py         # 설정 관리 시스템
-├── 📖 example.py        # Fixed GT 사용 예시 및 데모
-└── 📚 README.md         # 이 파일
+├── 🤖 model.py              # CNN 모델 정의 (3가지 아키텍처)
+├── 📊 dataset.py            # 데이터 처리 및 Fixed GT 파이프라인
+├── 🎓 train.py              # 모델 훈련 시스템
+├── 🔮 inference.py          # 모델 추론 및 성능 평가
+├── 🛠️ utils.py              # 유틸리티 함수들
+├── ⚙️ config.py             # 설정 관리 시스템
+├── 🔍 debug_augmentation.py # 데이터 증강 확인 스크립트
+└── 📚 README.md             # 이 파일
 ```
 
 ## 🤖 지원하는 CNN 모델
 
 | 모델 | 파라미터 수 | 용도 | 특징 | FPGA 적합성 |
 |------|-------------|------|------|-------------|
-| **BasicCNN** | ~1M | 프로토타이핑 | 간단하고 빠름 | ⭐⭐⭐ |
-| **LightweightCNN** | ~100K | **FPGA 배포** | 경량화, 실시간 처리 | ⭐⭐⭐⭐⭐ |
-| **ResNetCNN** | ~2M | 높은 정확도 | ResNet 기반 깊은 구조 | ⭐⭐ |
-| **UNetCNN** | ~5M | 세밀한 탐지 | 공간 정보 보존 | ⭐ |
-| **MultiScaleCNN** | ~3M | 복잡한 환경 | 다중 스케일 + Attention | ⭐⭐ |
+| **BasicCNN** | ~1M | 프로토타이핑 | 간단하고 빠름, Sigmoid 활성화 | ⭐⭐⭐ |
+| **MobileNetV2Regressor** | ~2-3M | 일반 용도 | MobileNetV2 백본, ImageNet 사전 학습 | ⭐⭐⭐ |
+| **MobileNetV2LightRegressor** | ~2-3M | 경량화 | MobileNetV2 경량 버전 | ⭐⭐⭐⭐ |
+
+모든 모델은 `temporal_window`를 지원하여 다중 프레임 입력이 가능합니다.
 
 ## 🚀 빠른 시작
 
 ### 1. 의존성 설치
 
 ```bash
-# PyTorch 설치 (CUDA 버전에 맞게)
-pip install torch torchvision torchaudio
+# Conda 환경 사용 (권장)
+conda env create -f ../environment.yml
+conda activate dvs_project
 
-# 기타 필요 라이브러리
-pip install numpy matplotlib pandas
+# 또는 pip로 직접 설치
+pip install torch torchvision torchaudio numpy matplotlib scipy
 ```
 
-### 2. Fixed GT 파이프라인 데모
+### 2. 모델 훈련
 
 ```bash
 cd dvs/cnn_sim
-python example.py    # 전체 데모 실행
+python train.py
 ```
 
-### 3. Fixed GT 데이터셋 사용
+학습 모드를 선택할 수 있습니다:
+- `ultra_fast`: 빠른 테스트 (basic, 80 frames, 20 epochs)
+- `single_frame`: 단일 프레임 학습 (basic, 1000 frames, temporal=1)
+- `standard`: 표준 학습 (basic, 500 frames, temporal=5)
+- `mobilenet_v2`: MobileNetV2 학습 (300 frames, temporal=5)
+- `mobilenet_v2_light`: 경량 MobileNetV2 학습 (400 frames, temporal=5)
+- `mobilenet_v2_single`: MobileNetV2 단일 프레임 (500 frames, temporal=1)
+
+### 3. 모델 추론
+
+```bash
+python inference.py
+```
+
+### 4. 데이터 증강 확인
+
+```bash
+python debug_augmentation.py
+```
+
+## 📊 Fixed GT 데이터셋 사용
+
+### 기본 사용법
 
 ```python
-from dataset import DVSFixedGTDataset, create_fixed_gt_dataloader
+from dataset import DVSFixedGTDataset, create_train_val_loaders
+from lib.bin_processor import BinProcessor
 
-# 이벤트 리스트 준비 (실제로는 bin 파일에서 로드)
-events_list = [(x, y, timestamp, polarity), ...]
+# 1. bin 파일에서 프레임 로드
+processor = BinProcessor(960, 720, has_header=True)
+frames_data = processor.read_frames("data/gaussian_large.bin", max_frames=200)
 
-# Fixed GT 데이터셋 생성
+# 개별 프레임 변환
+individual_frames = []
+for frame in frames_data:
+    frame_array = frame.raw_data.astype(np.float32)
+    if np.max(frame_array) > 0:
+        frame_array = frame_array / np.max(frame_array)
+    individual_frames.append(frame_array)
+
+# 2. 데이터로더 생성
+train_loader, val_loader = create_train_val_loaders(
+    individual_frames=individual_frames,
+    train_ratio=0.8,
+    batch_size=8,
+    true_center_coord=(541, 360),  # 외부 고정 GT 좌표
+    roi_size=(512, 512),            # ROI 크기
+    temporal_window=5,              # 시간 윈도우 크기
+    shift_range_x=50,               # X축 시프트 범위 (±픽셀)
+    shift_range_y=50                # Y축 시프트 범위 (±픽셀)
+)
+```
+
+### 데이터셋 직접 사용
+
+```python
+from dataset import DVSFixedGTDataset
+
+# 데이터셋 생성
 dataset = DVSFixedGTDataset(
-    events_list=events_list,
-    true_center_coord=(480, 294),    # 외부 고정 GT 좌표
-    roi_size=(64, 64),               # ROI 크기
-    shift_range=(-10, 10),           # 랜덤 시프트 범위
-    noise_injection_probability=0.5, # 노이즈 추가 확률
-    intensity_jitter_probability=0.3 # 밝기 변화 확률
+    individual_frames=individual_frames,
+    true_center_coord=(541, 360),    # 외부 고정 GT 좌표
+    roi_size=(512, 512),             # ROI 크기
+    temporal_window=5,               # 시간 윈도우
+    shift_range_x=50,                # X축 시프트 범위
+    shift_range_y=50                 # Y축 시프트 범위
 )
 
-# 학습/추론 모드 설정
-dataset.set_training_mode(True)   # 학습 시 증강 적용
-dataset.set_training_mode(False)  # 추론 시 원본 사용
-
-# DataLoader 생성
-train_loader = create_fixed_gt_dataloader(
-    events_list=events_list,
-    batch_size=32,
-    training=True,
-    true_center_coord=(480, 294),
-    roi_size=(64, 64)
-)
+# 학습/검증 모드 설정
+dataset.set_training_mode(True)   # 학습 시: 랜덤 shift 적용
+dataset.set_training_mode(False) # 검증 시: shift 없음 (일관된 평가)
 ```
 
-### 4. 모델 훈련
+## 🎓 모델 훈련
+
+### train.py 사용 (권장)
+
+```bash
+python train.py
+```
+
+학습 모드를 선택하면 자동으로 설정이 적용됩니다.
+
+### 프로그래밍 방식
 
 ```python
-from train import train_model
+from train import train_fixed_gt_model
 
-# 경량화 모델 훈련 (FPGA 배포용)
-trainer = train_model(
-    model_name="lightweight",
+# 모델 훈련
+trainer = train_fixed_gt_model(
+    model_name="mobilenet_v2_light",
     bin_file_path="/path/to/data.bin",
     config_overrides={
-        'max_frames': 1000,
-        'num_epochs': 50,
-        'batch_size': 32
+        'max_frames': 300,
+        'temporal_window': 5,
+        'num_epochs': 40,
+        'batch_size': 8,
+        'shift_range_x': 50,
+        'shift_range_y': 50
     }
 )
 ```
 
-### 5. 모델 추론
+## 🔮 모델 추론
 
 ```python
 from inference import DVSInference
 
 # 추론기 생성
-inferencer = DVSInference("lightweight", "checkpoints/lightweight_best.pth")
+inferencer = DVSInference(
+    checkpoint_path="checkpoints_mobilenet_v2_light/mobilenet_v2_light_best.pth",
+    device='auto'
+)
 
 # 성능 벤치마크
 timing = inferencer.benchmark_performance()
@@ -154,9 +213,9 @@ for frame in frames:
 ```python
 # 신규: 외부 고정 GT 사용
 dataset = DVSFixedGTDataset(
-    events_list=events,
-    true_center_coord=(480, 294),  # 외부에서 주입된 고정 GT
-    roi_size=(64, 64),             # ROI 기반 처리
+    individual_frames=frames,
+    true_center_coord=(541, 360),  # 외부에서 주입된 고정 GT
+    roi_size=(512, 512),            # ROI 기반 처리
     # 실시간 필터링 로직 완전 제거!
 )
 ```
@@ -166,67 +225,48 @@ dataset = DVSFixedGTDataset(
 | 구분 | 기존 방식 | Fixed GT 방식 | 개선 효과 |
 |------|-----------|---------------|-----------|
 | **GT 계산 시간** | 각 샘플마다 연산 | 0ms (외부 주입) | **100% 제거** |
-| **메모리 사용량** | 960×720 = 691K 픽셀 | 64×64 = 4K 픽셀 | **99.4% 감소** |
+| **메모리 사용량** | 960×720 = 691K 픽셀 | 512×512 = 262K 픽셀 | **62% 감소** |
 | **처리 속도** | 필터링 + GT 계산 | 순수 증강만 | **5-10배 향상** |
 | **코드 복잡성** | 복잡한 필터 로직 | 간결한 증강 로직 | **대폭 단순화** |
 
 ## 🎨 데이터 증강 파이프라인
 
-Fixed GT 시스템의 핵심인 3단계 증강:
+Fixed GT 시스템의 핵심인 랜덤 시프트 기반 증강:
 
-### 1️⃣ 랜덤 시프트 (필수)
-- `shift_range` 내에서 ROI 평행 이동
-- 새로운 정답 레이블 자동 계산
+### 랜덤 시프트 (학습 시만 적용)
+
+- `shift_range_x/y` 내에서 ROI 평행 이동
+- 새로운 정답 레이블 자동 계산 (ROI 내 상대 위치)
 - 다양한 중심점 위치 학습 가능
+- **검증 시에는 shift=0으로 고정**하여 일관된 평가
 
-### 2️⃣ 노이즈 추가 (선택적)  
-- Salt-and-Pepper 노이즈 추가
-- 노이즈 내성 향상
-- `noise_injection_probability`로 제어
+### Temporal Window
 
-### 3️⃣ 밝기 변화 (선택적)
-- 10-20% 이벤트 무작위 제거
-- 레이저 밝기 변화 시뮬레이션
-- `intensity_jitter_probability`로 제어
+- 다중 프레임을 채널로 활용 (예: temporal_window=5 → 5개 채널)
+- 시간적 정보를 통한 안정적인 예측
+- 슬라이딩 윈도우로 오버래핑 샘플 생성
 
 ## ⚙️ 설정 관리
 
-### 모듈화된 설정 시스템
+### 학습 모드 선택
+
+`config.py`의 `get_training_mode_configs()` 함수를 통해 사전 정의된 학습 모드를 선택할 수 있습니다:
 
 ```python
-from config import ExperimentConfig
+from config import get_training_mode_configs
 
-# 실험 설정 생성
-config = ExperimentConfig()
-
-# 데이터 설정
-config.data.max_frames = 1000
-config.data.bin_file_path = "/path/to/data.bin"
-
-# 모델 설정
-config.model.model_name = "lightweight"  # FPGA 배포용
-
-# 훈련 설정
-config.training.num_epochs = 50
-config.training.batch_size = 32
-config.training.learning_rate = 0.001
-
-# 설정 저장/로드
-config.save_config("experiment.json")
-loaded_config = ExperimentConfig.load_config("experiment.json")
+configs = get_training_mode_configs()
+# 반환: {
+#     "ultra_fast": {...},
+#     "single_frame": {...},
+#     "standard": {...},
+#     "mobilenet_v2": {...},
+#     "mobilenet_v2_light": {...},
+#     "mobilenet_v2_single": {...}
+# }
 ```
 
-### 사전 정의된 설정
-
-```python
-from config import get_quick_test_config, get_lightweight_config
-
-# 빠른 테스트용
-quick_config = get_quick_test_config()
-
-# FPGA 배포용 경량화 모델
-fpga_config = get_lightweight_config()
-```
+각 모드는 모델명, 프레임 수, 시간 윈도우, 에폭 수, 배치 크기 등을 포함합니다.
 
 ## 📈 성능 평가
 
@@ -238,14 +278,6 @@ fpga_config = get_lightweight_config()
 - **Accuracy@10px**: 10픽셀 이내 정확도
 - **FPS**: 초당 처리 프레임 수
 
-### 실시간 처리 성능
-
-| 환경 | 성능 (FPS) | 용도 |
-|------|------------|------|
-| **CPU** | 20-50 | 개발/테스트 |
-| **GPU** | 100-500 | 고성능 처리 |
-| **FPGA** | 100+ (예상) | 실시간 배포 |
-
 ### 훈련 결과 확인
 
 ```
@@ -256,32 +288,18 @@ checkpoints_{model_name}/
 └── config.json                     # 실험 설정
 ```
 
-## 🔧 FPGA 배포 고려사항
-
-### LightweightCNN 특징
-
-- **Depthwise Separable Convolution** 사용
-- **파라미터 수 최소화** (~100K)
-- **단순한 연산 구조**
-- **고정소수점 양자화 친화적**
-
-### FPGA 최적화 방향
-
-1. **양자화**: INT8/INT16으로 양자화
-2. **배치 크기**: 1로 설정 (실시간 처리)
-3. **메모리 최적화**: 가중치 압축
-4. **파이프라인**: 하드웨어 파이프라인 최적화
-
 ## 📋 데이터 형식
 
 ### 입력 데이터 (Fixed GT 방식)
-- **이벤트 리스트**: `[(x, y, timestamp, polarity), ...]`
-- **고정 GT 좌표**: 외부에서 주입된 참 중심점
-- **ROI 크기**: 64×64 (메모리 효율성)
+
+- **개별 프레임**: `List[np.ndarray]` - 각 프레임은 (H, W) 형태의 정규화된 배열
+- **고정 GT 좌표**: `(x, y)` - 외부에서 주입된 참 중심점
+- **ROI 크기**: `(512, 512)` - 메모리 효율성과 정확도 균형
 
 ### 출력 데이터
-- **ROI 텐서**: `(1, 64, 64)` 증강된 이미지
-- **상대 좌표**: `(rel_x, rel_y)` 0-1 정규화된 좌표
+
+- **ROI 텐서**: `(temporal_window, H, W)` - 다중 프레임 증강된 이미지
+- **상대 좌표**: `(rel_x, rel_y)` - 0-1 정규화된 ROI 내 상대 위치
 
 ## 🛠️ 고급 사용법
 
@@ -293,6 +311,7 @@ class MyCustomCNN(nn.Module):
     def __init__(self, input_channels=1, output_dim=2):
         super().__init__()
         # 모델 정의
+        # ...
     
     def forward(self, x):
         return x  # (batch_size, 2) 좌표 출력
@@ -300,137 +319,79 @@ class MyCustomCNN(nn.Module):
 # get_model() 함수에 등록
 models = {
     'basic': BasicCNN,
-    'lightweight': LightweightCNN,
+    'mobilenet_v2': MobileNetV2Regressor,
+    'mobilenet_v2_light': MobileNetV2LightRegressor,
     'mycustom': MyCustomCNN,  # 추가
 }
 ```
 
-### 커스텀 증강 기법
+### 커스텀 학습 설정
 
 ```python
-# dataset.py의 _apply_augmentations() 메서드 확장
-def _apply_augmentations(self, roi):
-    # 기존 증강들...
-    
-    # 커스텀 증강 추가
-    if self.custom_augmentation:
-        roi = self._apply_custom_transform(roi)
-    
-    return roi, new_label
-```
+from train import train_fixed_gt_model
 
-## 🎯 실용적 예시
-
-### Fixed GT 기반 완전 파이프라인
-
-```python
-from dataset import DVSFixedGTDataset, create_fixed_gt_dataloader
-from train import train_model
-from inference import DVSInference
-
-# 1. 이벤트 리스트 준비 (실제로는 bin 파일에서 로드)
-events_list = load_events_from_bin("/path/to/data.bin")
-
-# 2. Fixed GT 데이터로더 생성
-train_loader = create_fixed_gt_dataloader(
-    events_list=events_list,
-    batch_size=32,
-    training=True,
-    true_center_coord=(480, 294),  # 외부 고정 GT
-    roi_size=(64, 64),
-    shift_range=(-12, 12)
-)
-
-# 3. 경량화 모델 훈련
-trainer = train_model(
-    model_name="lightweight",
-    bin_file_path="/path/to/data.bin"
-)
-
-# 4. 추론 및 성능 측정
-inferencer = DVSInference("lightweight", "checkpoints/lightweight_best.pth")
-timing = inferencer.benchmark_performance()
-print(f"처리 속도: {timing['fps']:.1f} FPS")
-```
-
-### 파라미터 튜닝
-
-```python
-# 보수적 증강 설정
-conservative_dataset = DVSFixedGTDataset(
-    events_list=events,
-    shift_range=(-5, 5),
-    noise_injection_probability=0.2,
-    intensity_jitter_probability=0.1
-)
-
-# 적극적 증강 설정
-aggressive_dataset = DVSFixedGTDataset(
-    events_list=events,
-    shift_range=(-20, 20),
-    noise_injection_probability=0.6,
-    intensity_jitter_probability=0.4
+# 커스텀 설정으로 학습
+trainer = train_fixed_gt_model(
+    model_name="basic",
+    bin_file_path="/path/to/data.bin",
+    config_overrides={
+        'max_frames': 1000,
+        'temporal_window': 3,  # 3 프레임 사용
+        'num_epochs': 100,
+        'batch_size': 16,
+        'shift_range_x': 30,    # 작은 shift 범위
+        'shift_range_y': 30,
+        'patience': 20
+    }
 )
 ```
 
 ## 🔍 문제 해결
 
-### 일반적인 문제들
+### 메모리 부족
 
-#### 메모리 부족
 ```python
 # 배치 크기 줄이기
-config.training.batch_size = 8
-config.system.num_workers = 0
+config_overrides = {
+    'batch_size': 4,  # 또는 2
+    'max_frames': 100  # 프레임 수 제한
+}
 ```
 
-#### 수렴하지 않음
+### 수렴하지 않음
+
 ```python
-# 학습률 조정
-config.training.learning_rate = 0.0001
-# 단순한 모델 사용
-config.model.model_name = "basic"
+# 학습률 조정 또는 단순한 모델 사용
+config_overrides = {
+    'lr': 0.0001,  # 더 낮은 학습률
+    'model_name': 'basic'  # 단순한 모델
+}
 ```
 
-#### 데이터 로딩 오류
-```python
-# Fixed GT 방식 사용으로 대부분 해결됨
-dataset = DVSFixedGTDataset(
-    events_list=events,
-    true_center_coord=(480, 294)  # 외부 고정 GT
-)
-```
+### 검증 정확도가 불안정함
 
-#### 낮은 정확도
-```python
-# 더 많은 데이터 사용
-config.data.max_frames = None
-# 증강 활성화
-dataset = DVSFixedGTDataset(
-    shift_range=(-15, 15),
-    noise_injection_probability=0.4
-)
-```
+검증 시 shift를 사용하지 않도록 확인:
+- `dataset.set_training_mode(False)` 설정
+- 검증 시 `shift_x=0, shift_y=0`으로 고정됨
 
 ## 🚀 주요 혁신점 요약
 
 ### ✅ Fixed Ground Truth 시스템
 1. **실시간 필터링 완전 제거**: MedianPointExtractor, Kalman Filter 등 배제
 2. **외부 고정 GT 사용**: 사전 정의된 좌표로 처리 속도 5-10배 향상
-3. **ROI 기반 처리**: 메모리 사용량 99% 감소 (960×720 → 64×64)
+3. **ROI 기반 처리**: 메모리 사용량 62% 감소 (960×720 → 512×512)
 4. **간결한 코드 구조**: 핵심 증강 로직에만 집중
 
 ### ✅ 효율적 데이터 파이프라인
-1. **3단계 증강**: 랜덤 시프트 + 노이즈 추가 + 밝기 변화
-2. **학습/추론 모드 분리**: 효율적인 처리 흐름
-3. **파라미터 외부화**: 모든 설정이 외부에서 주입 가능
+1. **Temporal Window**: 다중 프레임을 통한 시간적 정보 활용
+2. **랜덤 시프트**: 학습 시 다양성 확보, 검증 시 일관성 유지
+3. **학습/검증 모드 분리**: 효율적인 처리 흐름
 4. **배치 처리 최적화**: 일관된 처리 속도 보장
 
-### ✅ FPGA 배포 지원
-1. **LightweightCNN**: ~100K 파라미터, Depthwise Separable Conv
-2. **실시간 처리**: 100+ FPS 예상 성능
-3. **양자화 친화적**: INT8/INT16 최적화 가능
-4. **하드웨어 파이프라인**: 병렬 처리 구조
+### ✅ 모델 다양성
+1. **BasicCNN**: 빠른 프로토타이핑용
+2. **MobileNetV2**: 일반 용도, ImageNet 사전 학습
+3. **MobileNetV2Light**: 경량화 버전
 
 ## 💡 결론
 
@@ -438,19 +399,11 @@ dataset = DVSFixedGTDataset(
 
 **핵심 성과**:
 - 처리 속도 **5-10배 향상**
-- 메모리 사용량 **99% 감소**  
+- 메모리 사용량 **62% 감소**  
 - 코드 복잡성 **대폭 단순화**
-- FPGA 실시간 배포 **완벽 지원**
+- Temporal 정보 활용으로 **안정적 예측**
 
 DVS 레이저 중심점 탐지를 위한 **차세대 고성능 CNN 시스템**입니다. 🎯
-
----
-
-## 📞 연락처
-
-이 프로젝트는 DVS 카메라를 이용한 레이저 중심점 탐지 졸업 연구의 일부입니다.
-
-문제가 있거나 개선 사항이 있다면 언제든 연락주세요!
 
 ---
 

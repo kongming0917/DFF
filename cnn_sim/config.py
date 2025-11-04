@@ -16,8 +16,8 @@ class FixedGTDataConfig:
     bin_file_path: str = "/hai/home/jdj/dvs/data/gaussian_large.bin"
     
     # Fixed GT 설정
-    true_center_coord: Tuple[int, int] = (480, 294)  # 고정 중심 좌표
-    roi_size: Tuple[int, int] = (384, 384)           # ROI 크기 (height, width)
+    true_center_coord: Tuple[int, int] = (541, 360)  # 고정 중심 좌표
+    roi_size: Tuple[int, int] = (512, 512)           # ROI 크기 (height, width)
     
     # 데이터 처리
     max_events: Optional[int] = None
@@ -39,7 +39,7 @@ class ModelConfig:
     """모델 관련 설정"""
     
     # 모델 아키텍처
-    model_name: str = "lightweight"  # basic, resnet, unet, lightweight, multiscale
+    model_name: str = "basic"  # basic, mobilenet_v2, mobilenet_v2_light
     input_channels: int = 1
     output_dim: int = 2
 
@@ -223,119 +223,93 @@ class FixedGTExperimentConfig:
         return config
 
 
-# 사전 정의된 Fixed GT 설정들
-def get_quick_test_config() -> FixedGTExperimentConfig:
-    """빠른 테스트용 설정"""
-    config = FixedGTExperimentConfig()
+# 학습 모드 설정 (train.py에서 사용)
+def get_training_mode_configs() -> Dict[str, Dict[str, Any]]:
+    """
+    train.py에서 사용하는 학습 모드 설정들
     
-    # 데이터 설정
-    config.data.max_events = 5000
-    config.data.train_ratio = 0.8
-    config.data.roi_size = (384, 384)
-    config.data.shift_range = (-8, 8)
-    
-    # 모델 설정  
-    config.model.model_name = "lightweight"
-    
-    # 훈련 설정
-    config.training.num_epochs = 20
-    config.training.batch_size = 16
-    config.training.patience = 8
-    
-    # 시스템 설정
-    config.system.num_workers = 0
-    config.experiment_name = "quick_test_fixed_gt"
-    
-    return config
-
-
-def get_lightweight_config() -> FixedGTExperimentConfig:
-    """FPGA 배포용 경량화 모델 설정"""
-    config = FixedGTExperimentConfig()
-    
-    # 데이터 설정
-    config.data.roi_size = (384, 384)
-    config.data.shift_range = (-10, 10)
-    config.data.noise_injection_probability = 0.3
-    config.data.intensity_jitter_probability = 0.2
-    
-    # 모델 설정
-    config.model.model_name = "lightweight"
-    
-    # 훈련 설정
-    config.training.batch_size = 64
-    config.training.learning_rate = 0.002
-    config.training.num_epochs = 100
-    
-    # 추론 설정
-    config.inference.batch_size = 1  # 실시간 처리
-    config.inference.benchmark = True
-    
-    config.experiment_name = "lightweight_fpga_fixed_gt"
-    
-    return config
-
-
-def get_high_accuracy_config() -> FixedGTExperimentConfig:
-    """높은 정확도를 위한 설정"""
-    config = FixedGTExperimentConfig()
-    
-    # 데이터 설정
-    config.data.max_events = None  # 모든 이벤트 사용
-    config.data.roi_size = (512, 512)  # 더 큰 ROI
-    config.data.shift_range = (-20, 20)  # 더 넓은 증강
-    config.data.noise_injection_probability = 0.5
-    config.data.intensity_jitter_probability = 0.4
-    
-    # 모델 설정
-    config.model.model_name = "resnet"
-    
-    # 훈련 설정
-    config.training.num_epochs = 200
-    config.training.batch_size = 16
-    config.training.learning_rate = 0.0005
-    config.training.patience = 25
-    
-    config.experiment_name = "high_accuracy_fixed_gt"
-    
-    return config
-
-
-def get_comparison_configs() -> List[FixedGTExperimentConfig]:
-    """모델 비교용 설정들"""
-    
-    base_config = get_quick_test_config()
-    configs = []
-    
-    model_names = ['basic', 'lightweight', 'resnet', 'multiscale']
-    
-    for model_name in model_names:
-        config = FixedGTExperimentConfig()
+    Returns:
+        Dict[str, Dict]: 학습 모드별 설정 딕셔너리
+    """
+    return {
+        "ultra_fast": {
+            'model_name': 'basic',
+            'max_frames': 80,         # 빠른 테스트 (80 프레임 → 76 샘플)
+            'temporal_window': 5,
+            'num_epochs': 20,
+            'batch_size': 4,
+            'patience': 8,
+            'roi_size': (512, 512),
+            'shift_range_x': 50,      # 안전한 범위로 조정 (레이저 직경 400px 고려)
+            'shift_range_y': 50,
+            'description': '빠른 테스트 (basic, 80 frames, 20 epochs)'
+        },
         
-        # 기본 설정 복사
-        config.data = base_config.data
-        config.training = base_config.training
-        config.system = base_config.system
-        config.inference = base_config.inference
+        "single_frame": {
+            'model_name': 'basic',
+            'max_frames': 1000,        # 단일 프레임 테스트 (1000 프레임)
+            'temporal_window': 1,     # 개별 프레임만 사용!
+            'num_epochs': 30,
+            'batch_size': 8,
+            'patience': 10,
+            'roi_size': (512, 512),
+            'shift_range_x': 50,      # 안전한 범위로 조정
+            'shift_range_y': 50,
+            'description': '단일 프레임 (basic, 1000 frames, temporal=1)'
+        },
         
-        # 모델별 설정
-        config.model.model_name = model_name
-        config.experiment_name = f"comparison_fixed_gt_{model_name}"
+        "standard": {
+            'model_name': 'basic',
+            'max_frames': 500,        
+            'temporal_window': 5,
+            'num_epochs': 50,
+            'batch_size': 4,
+            'patience': 15,
+            'roi_size': (512, 512),
+            'shift_range_x': 50,      # 안전한 범위로 조정
+            'shift_range_y': 50,
+            'description': '표준 학습 (basic, 500 frames, temporal=5, epochs=50)'
+        },
         
-        # 모델별 특화 설정
-        if model_name == "lightweight":
-            config.training.batch_size = 64
-            config.training.learning_rate = 0.002
-        elif model_name == "resnet":
-            config.training.batch_size = 16
-            config.training.learning_rate = 0.0005
-        elif model_name == "multiscale":
-            config.training.batch_size = 16
-            config.training.learning_rate = 0.001
+        "mobilenet_v2": {
+            'model_name': 'mobilenet_v2',
+            'max_frames': 300,        
+            'temporal_window': 5,     # MobileNetV2도 temporal 데이터 사용
+            'num_epochs': 40,
+            'batch_size': 6,          # temporal 채널로 인해 배치 크기 조정
+            'patience': 12,
+            'roi_size': (512, 512),
+            'shift_range_x': 50,      # 안전한 범위로 조정
+            'shift_range_y': 50,
+            'description': 'MobileNetV2 기반 학습 (300 frames, temporal=5, epochs=40)'
+        },
         
-        configs.append(config)
-    
-    return configs
+        "mobilenet_v2_light": {
+            'model_name': 'mobilenet_v2_light',
+            'max_frames': 400,        
+            'temporal_window': 5,     # 경량 모델도 temporal 데이터 사용
+            'num_epochs': 35,
+            'batch_size': 8,          # temporal 채널로 인해 배치 크기 조정
+            'patience': 10,
+            'roi_size': (512, 512),
+            'shift_range_x': 50,      # 안전한 범위로 조정
+            'shift_range_y': 50,
+            'description': '경량 MobileNetV2 학습 (400 frames, temporal=5, epochs=35)'
+        },
+        
+        "mobilenet_v2_single": {
+            'model_name': 'mobilenet_v2',
+            'max_frames': 500,        
+            'temporal_window': 1,     # 단일 프레임 버전
+            'num_epochs': 30,
+            'batch_size': 12,         # 단일 프레임이므로 더 큰 배치 크기
+            'patience': 8,
+            'roi_size': (512, 512),
+            'shift_range_x': 50,      # 안전한 범위로 조정
+            'shift_range_y': 50,
+            'description': 'MobileNetV2 단일 프레임 학습 (500 frames, temporal=1, epochs=30)'
+        }
+    }
 
 
 # 설정 검증 함수
@@ -362,7 +336,7 @@ def validate_fixed_gt_config(config: FixedGTExperimentConfig) -> List[str]:
         warnings.append(f"Invalid shift range: {config.data.shift_range}")
     
     # 모델 검증
-    valid_models = ['basic', 'resnet', 'unet', 'lightweight', 'multiscale']
+    valid_models = ['basic', 'mobilenet_v2', 'mobilenet_v2_light']
     if config.model.model_name not in valid_models:
         warnings.append(f"Unknown model: {config.model.model_name}")
     
@@ -401,29 +375,12 @@ if __name__ == "__main__":
     else:
         print(f"\n✅ Configuration is valid")
     
-    # 빠른 테스트 설정
-    print(f"\n🚀 Quick Test Fixed GT Configuration:")
-    quick_config = get_quick_test_config()
-    print(f"   Model: {quick_config.model.model_name}")
-    print(f"   Max events: {quick_config.data.max_events}")
-    print(f"   ROI size: {quick_config.data.roi_size}")
-    print(f"   Epochs: {quick_config.training.num_epochs}")
-    print(f"   Batch size: {quick_config.training.batch_size}")
-    
-    # 경량화 설정
-    print(f"\n💡 Lightweight FPGA Configuration:")
-    fpga_config = get_lightweight_config()
-    print(f"   Model: {fpga_config.model.model_name}")
-    print(f"   ROI size: {fpga_config.data.roi_size}")
-    print(f"   Learning rate: {fpga_config.training.learning_rate}")
-    print(f"   Inference batch: {fpga_config.inference.batch_size}")
-    
     # 설정 저장/로드 테스트
     print(f"\n💾 Save/Load Test:")
     test_file = "test_fixed_gt_config.json"
     
     try:
-        quick_config.save_config(test_file)
+        config.save_config(test_file)
         loaded_config = FixedGTExperimentConfig.load_config(test_file)
         
         print(f"   Loaded experiment: {loaded_config.experiment_name}")
@@ -436,18 +393,15 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"   ❌ Save/Load test failed: {e}")
     
-    # 비교 설정들
-    print(f"\n🔍 Model Comparison Configurations:")
-    comparison_configs = get_comparison_configs()
-    for i, comp_config in enumerate(comparison_configs):
-        print(f"   {i+1}. {comp_config.model.model_name} - "
-              f"batch_size={comp_config.training.batch_size}, "
-              f"lr={comp_config.training.learning_rate}")
+    # 사용 가능한 모델 확인
+    print(f"\n📦 Available Models:")
+    valid_models = ['basic', 'mobilenet_v2', 'mobilenet_v2_light']
+    for i, model in enumerate(valid_models, 1):
+        print(f"   {i}. {model}")
     
     print(f"\n✅ Fixed GT configuration system test completed!")
     print(f"\n🎯 Key Features:")
     print(f"   ✅ Fixed GT 중심 좌표 설정")
     print(f"   ✅ ROI 기반 처리 설정")
     print(f"   ✅ 데이터 증강 파라미터")
-    print(f"   ✅ FPGA 배포 최적화")
     print(f"   ✅ 간소화된 설정 구조")

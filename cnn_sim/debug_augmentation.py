@@ -8,11 +8,14 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-# 상위 디렉토리 모듈 import
-sys.path.append('/hai/home/jdj/dvs/filter_sim')
+# 상위 디렉토리를 sys.path에 추가 (lib 모듈 사용을 위해)
+dvs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if dvs_root not in sys.path:
+    sys.path.insert(0, dvs_root)
 
+# 상위 디렉토리 모듈 import
 from dataset import DVSFixedGTDataset
-from dvs_filter import BinProcessor
+from lib.bin_processor import BinProcessor
 
 def visualize_augmentation_samples(dataset: DVSFixedGTDataset, num_samples: int = 6, save_path: str = "augmentation/augmentation_debug.png", show_original: bool = False):
     """데이터 증강 파이프라인 검증을 위한 시각화"""
