@@ -29,7 +29,7 @@ class LaserYOLODataset(Dataset):
     def __init__(
         self,
         individual_frames: List[np.ndarray],
-        true_center_coord: Tuple[int, int] = (541, 360),
+        true_center_coord: Tuple[int, int] = (541, 361),
         laser_diameter: int = 400,  # 레이저 스팟 직경 (픽셀)
         roi_size: Tuple[int, int] = (512, 512),
         temporal_window: int = 5,
@@ -240,7 +240,7 @@ if __name__ == "__main__":
     # 데이터셋 생성
     dataset = LaserYOLODataset(
         dummy_frames,
-        true_center_coord=(541, 360),
+        true_center_coord=(541, 361),
         laser_diameter=400,
         roi_size=(512, 512),
         temporal_window=5,

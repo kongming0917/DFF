@@ -18,7 +18,6 @@ except ImportError:
     # 상위 디렉토리에서 실행할 때
     from yolo_sim.model import YOLOv3Tiny, decode_predictions, get_laser_center
     from yolo_sim.dataset import LaserYOLODataset, load_frames_from_bin
-    from yolo_sim.utils import calculate_event_center_from_roi
 
 
 class LaserYOLOInference:
@@ -41,6 +40,9 @@ class LaserYOLOInference:
         self.model = self._load_model(checkpoint_path)
         laser_size = 400 / 512
         self.anchors = [(laser_size, laser_size), (0.5, 0.5), (1.0, 1.0)]
+        
+        # 이전 성공한 중심점 추적 (YOLO 실패 시 사용)
+        self.last_successful_center = (0.5, 0.5)
         
         print(f"✅ Model loaded from {checkpoint_path}")
     
@@ -104,14 +106,17 @@ class LaserYOLOInference:
                     if center:
                         best_score = torch.max(scores_list[0]).item()
                         predictions.append((center[0], center[1], best_score))
+                        # 성공 시 마지막 위치 업데이트
+                        self.last_successful_center = (center[0], center[1])
                     else:
-                        # YOLO 감지 실패 시 이벤트 중심 계산
-                        event_center = calculate_event_center_from_roi(image[0].cpu().numpy())
-                        predictions.append((event_center[0], event_center[1], 0.0))  # confidence=0.0
+                        # YOLO 감지 실패 시 이전 프레임 값 사용
+                        predictions.append((self.last_successful_center[0], self.last_successful_center[1], 0.0))
+                        # # YOLO 감지 실패 시 이벤트 중심 계산
+                        # event_center = calculate_event_center_from_roi(image[0].cpu().numpy())
+                        # predictions.append((event_center[0], event_center[1], 0.0))  # confidence=0.0
                 else:
-                    # YOLO 감지 실패 시 이벤트 중심 계산
-                    event_center = calculate_event_center_from_roi(image[0].cpu().numpy())
-                    predictions.append((event_center[0], event_center[1], 0.0))  # confidence=0.0
+                    # YOLO 감지 실패 시 이전 프레임 값 사용
+                    predictions.append((self.last_successful_center[0], self.last_successful_center[1], 0.0))
         
         if return_targets:
             return predictions, targets
@@ -412,7 +417,7 @@ def run_inference(
     
     # ROI 파라미터
     roi_params = {
-        'true_center_coord': (541, 360),
+        'true_center_coord': (541, 361),
         'laser_diameter': 400,
         'roi_size': (512, 512),
         'temporal_window': 5,

@@ -12,6 +12,7 @@ DVS(Dynamic Vision Sensor) 카메라 데이터에서 레이저 스팟을 객체�
 - ✅ 여러 레이저 동시 감지 가능 (확장성)
 - ✅ 신뢰도(confidence) 점수 제공
 - ✅ 객체 감지 프레임워크 활용
+- ✅ CIoU Loss 사용으로 더 정밀한 bounding box 회귀
 
 **한계**:
 - ⚠️ CNN 회귀보다 복잡한 구조
@@ -23,14 +24,10 @@ DVS(Dynamic Vision Sensor) 카메라 데이터에서 레이저 스팟을 객체�
 
 ---
 
-# YOLOv3-Tiny 레이저 중심점 검출
-
-Object Detection 방식으로 레이저 스팟을 감지하고 중심점을 추출합니다.
-
 ## 📁 구조
 
 ```
-yolo_detection/
+yolo_sim/
 ├── model.py          # YOLOv3-Tiny 모델
 ├── dataset.py        # YOLO용 데이터셋 (bbox 형식)
 ├── train.py          # 학습 스크립트
@@ -42,17 +39,39 @@ yolo_detection/
 ## 🚀 사용법
 
 ### 학습
+
 ```bash
-cd /hai/home/jdj/dvs/yolo_detection
+cd /hai/home/jdj/dvs/yolo_sim
 python train.py
 ```
 
+또는 Python에서 직접 호출:
+
+```python
+from train import train_yolo
+
+train_yolo(
+    model_name='yolo_tiny_laser',
+    bin_file_path="/hai/home/jdj/dvs/data/gaussian_large.bin",
+    max_frames=500,
+    num_epochs=50,
+    batch_size=4,
+    lr=0.001,
+    lambda_coord=5.0,
+    lambda_obj=1.0,
+    lambda_noobj=0.1,
+    conf_threshold=0.4
+)
+```
+
 ### 추론
+
 ```bash
 python inference.py
 ```
 
 ### 모델/데이터셋 테스트
+
 ```bash
 python model.py      # 모델 구조 확인
 python dataset.py    # 데이터셋 확인
@@ -64,23 +83,55 @@ python utils.py      # 유틸리티 테스트
 - **YOLOv3-Tiny 기반**: 경량화된 구조
 - **단일 객체 감지**: 레이저 스팟 하나만 감지
 - **Bbox → Center**: Bounding box 중심점 추출
+- **CIoU Loss**: IoU 기반 loss로 더 정밀한 회귀
 - **완전 독립**: cnn_sim과 독립적으로 동작
 
 ## 📊 vs CNN Regression
 
-| 방식 | 접근법 | 출력 |
-|------|--------|------|
-| CNN Regression | 좌표 직접 예측 | (x, y) |
-| YOLO Detection | 물체 감지 후 중심 추출 | (x, y, w, h, conf) → (x, y) |
+| 방식 | 접근법 | 출력 | Loss |
+|------|--------|------|------|
+| CNN Regression | 좌표 직접 예측 | (x, y) | MSE |
+| YOLO Detection | 물체 감지 후 중심 추출 | (x, y, w, h, conf) → (x, y) | CIoU + BCE |
 
 ## ⚙️ 주요 파라미터
 
 - `max_frames`: 500 (학습 프레임 수)
-- `num_epochs`: 30
+- `num_epochs`: 50
 - `batch_size`: 4
+- `lr`: 0.001 (학습률)
 - `roi_size`: 512×512
 - `shift_range`: ±50px
 - `laser_diameter`: 400px
+- `true_center_coord`: (541, 361) - 실제 빔 중심 좌표
+- `temporal_window`: 5 - 시간적 윈도우 크기
+
+### Loss 파라미터
+
+- `lambda_coord`: 5.0 - 좌표 loss 가중치
+- `lambda_obj`: 1.0 - objectness loss 가중치
+- `lambda_noobj`: 0.1 - negative objectness loss 가중치
+- `conf_threshold`: 0.4 - detection confidence threshold
+
+### Loss Function
+
+**CIoU Loss (Complete IoU Loss)** 사용:
+- IoU + 중심점 거리 + 종횡비 일치도
+- MSE Loss보다 bounding box 회귀에 더 적합
+- 잘못된 grid cell 감지 시 추가 Loss 계산
+
+MSE Loss는 주석 처리되어 있어 필요시 전환 가능합니다.
+
+## 📊 학습 결과
+
+학습 완료 후:
+- `checkpoints_{model_name}/`: 모델 체크포인트 (best model)
+- `train_results_{model_name}/`: 학습 곡선, 예측 결과, worst cases 시각화
+
+추적되는 메트릭:
+- Train Loss / Val Loss
+- Pixel Error (평균 픽셀 오차)
+- Acc@5px (5px 이내 정확도)
+- Acc@10px (10px 이내 정확도)
 
 ---
 

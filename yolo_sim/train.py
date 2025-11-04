@@ -25,7 +25,6 @@ except ImportError:
     # 상위 디렉토리에서 실행할 때
     from yolo_sim.model import YOLOv3Tiny, decode_predictions, get_laser_center
     from yolo_sim.dataset import create_train_val_loaders, load_frames_from_bin
-    from yolo_sim.utils import calculate_event_center_from_roi
 
 
 class YOLOLoss(nn.Module):
@@ -38,6 +37,65 @@ class YOLOLoss(nn.Module):
         self.lambda_noobj = lambda_noobj  # 255개 negative cell의 영향 최소화
         self.mse = nn.MSELoss(reduction='sum')
         self.bce = nn.BCEWithLogitsLoss(reduction='sum')
+    
+    def _ciou_loss(self, pred_box, target_box):
+        """
+        Complete IoU Loss 계산
+        
+        Args:
+            pred_box: [4] (x_center, y_center, width, height) 정규화된 좌표
+            target_box: [4] (x_center, y_center, width, height) 정규화된 좌표
+        
+        Returns:
+            ciou_loss: scalar
+        """
+        # 좌상단, 우하단 좌표로 변환
+        pred_x1 = pred_box[0] - pred_box[2] / 2
+        pred_y1 = pred_box[1] - pred_box[3] / 2
+        pred_x2 = pred_box[0] + pred_box[2] / 2
+        pred_y2 = pred_box[1] + pred_box[3] / 2
+        
+        target_x1 = target_box[0] - target_box[2] / 2
+        target_y1 = target_box[1] - target_box[3] / 2
+        target_x2 = target_box[0] + target_box[2] / 2
+        target_y2 = target_box[1] + target_box[3] / 2
+        
+        # Intersection
+        inter_x1 = torch.max(pred_x1, target_x1)
+        inter_y1 = torch.max(pred_y1, target_y1)
+        inter_x2 = torch.min(pred_x2, target_x2)
+        inter_y2 = torch.min(pred_y2, target_y2)
+        inter_area = torch.clamp(inter_x2 - inter_x1, min=0) * torch.clamp(inter_y2 - inter_y1, min=0)
+        
+        # Union
+        pred_area = pred_box[2] * pred_box[3]
+        target_area = target_box[2] * target_box[3]
+        union_area = pred_area + target_area - inter_area + 1e-6
+        
+        # IoU
+        iou = inter_area / union_area
+        
+        # 중심점 간 거리
+        center_distance_sq = (pred_box[0] - target_box[0]) ** 2 + (pred_box[1] - target_box[1]) ** 2
+        
+        # Enclosing box의 대각선 길이
+        enclose_x1 = torch.min(pred_x1, target_x1)
+        enclose_y1 = torch.min(pred_y1, target_y1)
+        enclose_x2 = torch.max(pred_x2, target_x2)
+        enclose_y2 = torch.max(pred_y2, target_y2)
+        enclose_diag_sq = (enclose_x2 - enclose_x1) ** 2 + (enclose_y2 - enclose_y1) ** 2 + 1e-6
+        
+        # 종횡비 일치도
+        v = (4 / (torch.pi ** 2)) * torch.pow(
+            torch.atan(target_box[2] / (target_box[3] + 1e-6)) - 
+            torch.atan(pred_box[2] / (pred_box[3] + 1e-6)), 2
+        )
+        alpha = v / (1 - iou + v + 1e-6)
+        
+        # CIoU
+        ciou = iou - (center_distance_sq / enclose_diag_sq) - (alpha * v)
+        
+        return 1 - ciou
     
     def forward(self, predictions, targets, anchors):
         """
@@ -74,17 +132,36 @@ class YOLOLoss(nn.Module):
         for b in range(batch_size):
             gi, gj = grid_i[b], grid_j[b]
             
-            # 좌표 loss
-            pred_xy = pred[b, 0, gj, gi, :2]
-            target_xy = torch.tensor([target_x[b] - gi.float(), target_y[b] - gj.float()], 
-                                     device=pred_xy.device)
-            coord_loss += self.mse(torch.sigmoid(pred_xy), target_xy)
+            # ===== CIoU Loss (현재 사용) =====
+            # 전체 bounding box 계산 (CIoU Loss용)
+            pred_xy_offset = torch.sigmoid(pred[b, 0, gj, gi, :2])
+            pred_wh_log = pred[b, 0, gj, gi, 2:4]
             
-            # 크기 loss
-            pred_wh = pred[b, 0, gj, gi, 2:4]
-            target_wh_ratio = torch.tensor([targets[b, 2] / anchor_w, targets[b, 3] / anchor_h], 
-                                          device=pred_wh.device)
-            coord_loss += self.mse(pred_wh, torch.log(target_wh_ratio + 1e-6))
+            # 예측 box: 전체 좌표로 변환
+            pred_x_center = (pred_xy_offset[0] + gi.float()) / grid_w
+            pred_y_center = (pred_xy_offset[1] + gj.float()) / grid_h
+            pred_w = torch.exp(pred_wh_log[0]) * anchor_w
+            pred_h = torch.exp(pred_wh_log[1]) * anchor_h
+            pred_box = torch.stack([pred_x_center, pred_y_center, pred_w, pred_h])
+            
+            # 타겟 box: 이미 정규화된 전체 좌표
+            target_box = targets[b, :4]  # (x_center, y_center, width, height)
+            
+            # CIoU Loss
+            coord_loss += self._ciou_loss(pred_box, target_box)
+            
+            # ===== MSE Loss (주석 처리 - 필요시 전환 가능) =====
+            # # 좌표 loss (cell 내부 offset)
+            # pred_xy = pred[b, 0, gj, gi, :2]
+            # target_xy = torch.tensor([target_x[b] - gi.float(), target_y[b] - gj.float()], 
+            #                          device=pred_xy.device)
+            # coord_loss += self.mse(torch.sigmoid(pred_xy), target_xy)
+            # 
+            # # 크기 loss (log scale)
+            # pred_wh = pred[b, 0, gj, gi, 2:4]
+            # target_wh_ratio = torch.tensor([targets[b, 2] / anchor_w, targets[b, 3] / anchor_h], 
+            #                               device=pred_wh.device)
+            # coord_loss += self.mse(pred_wh, torch.log(target_wh_ratio + 1e-6))
             
             # Objectness loss (positive와 negative 분리)
             pred_conf = pred[b, 0, :, :, 4]
@@ -161,12 +238,9 @@ def plot_training_curves(history: Dict[str, List], save_dir: str, model_name: st
     # 저장
     plot_path = os.path.join(save_dir, f'{model_name}_training_curves.png')
     plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
     print(f"📊 Training curves saved to: {plot_path}")
     
-    try:
-        plt.show()
-    except:
-        plt.close()
 
 
 def visualize_final_predictions(
@@ -273,13 +347,8 @@ def visualize_final_predictions(
     # 저장
     save_path = os.path.join(save_dir, f'{model_name}_predictions.png')
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
     print(f"📊 Final predictions saved to: {save_path}")
-    
-    try:
-        plt.show()
-    except:
-        plt.close()
-
 
 def visualize_worst_cases_training(
     predictions: np.ndarray,
@@ -339,7 +408,14 @@ def visualize_worst_cases_training(
     
     # 2. 오차 크기별 분포
     ax2 = fig.add_subplot(gs[1, 0])
-    error_bins = [0, 5, 10, 20, 50, 100, np.max(pixel_errors_array)+1]
+    max_error = np.max(pixel_errors_array)
+    # error_bins가 단조 증가하도록 보장
+    base_bins = [0, 5, 10, 20, 50, 100]
+    if max_error + 1 > 100:
+        error_bins = base_bins + [max_error + 1]
+    else:
+        # max_error가 100보다 작으면 마지막 구간만 조정
+        error_bins = [b for b in base_bins if b <= max_error] + [max_error + 1]
     hist, _ = np.histogram(pixel_errors_array, bins=error_bins)
     
     colors = ['green', 'lightgreen', 'yellow', 'orange', 'red', 'darkred']
@@ -391,18 +467,19 @@ def visualize_worst_cases_training(
     # 저장
     save_path = os.path.join(save_dir, f'{model_name}_worst_cases.png')
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
     print(f"📊 Worst cases analysis saved to: {save_path}")
     
     # 통계 출력
     print(f"\n📊 Worst {num_cases} Cases:")
     for rank, idx in enumerate(worst_indices, 1):
         error = pixel_errors_array[idx]
-        print(f"   {rank}. Sample {idx}: {error:.1f}px")
+        pred = predictions[idx]
+        tgt = targets[idx]
+        print(f"   {rank}. Sample {idx}: {error:.1f}px | "
+              f"Pred=({pred[0]:.4f}, {pred[1]:.4f}), "
+              f"Target=({tgt[0]:.4f}, {tgt[1]:.4f})")
     
-    try:
-        plt.show()
-    except:
-        plt.close()
 
 
 def train_yolo(
@@ -412,9 +489,21 @@ def train_yolo(
     num_epochs: int = 50,
     batch_size: int = 4,
     lr: float = 0.001,
-    device: str = 'auto'
+    device: str = 'auto',
+    lambda_coord: float = 5.0,
+    lambda_obj: float = 1.0,
+    lambda_noobj: float = 0.1,
+    conf_threshold: float = 0.6
 ):
-    """YOLO모델 학습"""
+    """YOLO모델 학습
+    
+    Returns:
+        dict: 학습 결과 딕셔너리
+            - pixel_error: 평균 pixel error
+            - acc_5px: 5px 이내 정확도 (%)
+            - acc_10px: 10px 이내 정확도 (%)
+            - best_val_loss: 최고 validation loss
+    """
     
     # Device 설정
     if device == 'auto':
@@ -436,7 +525,7 @@ def train_yolo(
         train_ratio=0.8,
         batch_size=batch_size,
         num_workers=0,
-        true_center_coord=(541, 360),
+        true_center_coord=(541, 361),
         laser_diameter=400,
         roi_size=(512, 512),
         temporal_window=5,
@@ -449,7 +538,7 @@ def train_yolo(
     print(f"📊 Model created: {model_name}")
     
     # Loss, Optimizer
-    criterion = YOLOLoss()
+    criterion = YOLOLoss(lambda_coord=lambda_coord, lambda_obj=lambda_obj, lambda_noobj=lambda_noobj)
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=5)
     
@@ -472,7 +561,9 @@ def train_yolo(
     
     best_val_loss = float('inf')
     save_dir = f'checkpoints_{model_name}'
+    results_dir = f'train_results_{model_name}'
     os.makedirs(save_dir, exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
     
     for epoch in range(num_epochs):
         # 훈련
@@ -504,7 +595,12 @@ def train_yolo(
         val_predictions = []
         val_targets = []
         
-        last_successful_center = (0.5, 0.5)
+        # Validation 평가: batch 내에서만 이전 성공 값을 사용
+        # batch가 바뀌면 random shift도 바뀌므로, batch 시작 시 초기화
+        DETECTION_FAILURE_ERROR = 200.0  # YOLO 감지 실패 시 에러 (의미 있는 고정값)
+        ROI_SIZE = 512  # ROI 크기 (에러 계산용)
+        
+        batch_last_successful = None
         
         with torch.no_grad():
             for images, targets in val_loader:
@@ -516,25 +612,39 @@ def train_yolo(
                 val_loss += loss.item()
                 
                 # 중심점 정확도 계산
-                boxes_list, scores_list = decode_predictions(outputs, anchors, conf_threshold=0.4)
+                boxes_list, scores_list = decode_predictions(outputs, anchors, conf_threshold=conf_threshold)
+                
+                # 새로운 batch 시작: 이전 성공 값 초기화 (random shift가 바뀌므로)
+                batch_last_successful = None
+                
                 for i, (boxes, scores) in enumerate(zip(boxes_list, scores_list)):
                     target_center = (targets[i, 0].item(), targets[i, 1].item())
                     val_targets.append(target_center)
                     
                     pred_center = get_laser_center(boxes, scores) if len(boxes) > 0 else None
                     
+                    # YOLO 감지 실패 시: batch 내 이전 성공 값 사용, 없으면 실패로 처리
                     if pred_center is None:
-                        # YOLO 감지 실패 시 이벤트 중심 계산
-                        event_center = calculate_event_center_from_roi(images[i].cpu().numpy())
-                        final_center = event_center
+                        final_center = batch_last_successful if batch_last_successful is not None else (0.5, 0.5)
                     else:
-                        # 성공: 현재 좌표 사용 및 마지막 위치 업데이트
                         final_center = pred_center
-                        last_successful_center = pred_center
+                        batch_last_successful = pred_center  # batch 내 성공 값 업데이트
+                    
+                    # pixel_error 계산
+                    if pred_center is None and batch_last_successful is None:
+                        pixel_error = DETECTION_FAILURE_ERROR  # YOLO 감지 실패
+                    else:
+                        pixel_error = np.sqrt(((np.array(final_center) - np.array(target_center)) * ROI_SIZE) ** 2).sum()
                     
                     val_predictions.append(final_center)
-                    pixel_error = np.sqrt(((np.array(final_center) - np.array(target_center)) * 512) ** 2).sum()
                     pixel_errors.append(pixel_error)
+                    
+                    # 디버깅: 큰 오차 발생 시 로깅
+                    if pixel_error > 400:
+                        print(f"⚠️ Large error detected: Sample {len(val_predictions)-1}, "
+                              f"pred={final_center}, target={target_center}, "
+                              f"error={pixel_error:.1f}px, "
+                              f"YOLO_success={pred_center is not None}")
                     
         
         val_loss /= len(val_loader)
@@ -573,15 +683,20 @@ def train_yolo(
     print(f"\n✅ Training completed! Best val loss: {best_val_loss:.4f}")
     print(f"📁 Checkpoints saved to: {save_dir}/")
     
+    # 최종 검증 결과 (마지막 epoch)
+    final_pixel_error = avg_pixel_error
+    final_acc_5px = acc_5px
+    final_acc_10px = acc_10px
+    
     # 학습 곡선 시각화
-    plot_training_curves(history, save_dir, model_name)
+    plot_training_curves(history, results_dir, model_name)
     
     # 최종 예측 결과 시각화
     if val_predictions and val_targets:
         visualize_final_predictions(
             np.array(val_predictions), 
             np.array(val_targets), 
-            save_dir, 
+            results_dir, 
             model_name
         )
         
@@ -590,9 +705,18 @@ def train_yolo(
             np.array(val_predictions),
             np.array(val_targets),
             pixel_errors,
-            save_dir,
+            results_dir,
             model_name
         )
+    
+    # 결과 반환
+    return {
+        'pixel_error': final_pixel_error,
+        'acc_5px': final_acc_5px,
+        'acc_10px': final_acc_10px,
+        'best_val_loss': best_val_loss,
+        'history': history
+    }
 
 
 if __name__ == "__main__":
