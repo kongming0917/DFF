@@ -152,7 +152,7 @@ class DVSInference:
         # 데이터셋 생성 (추론 모드)
         dataset = DVSFixedGTDataset(
             individual_frames=individual_frames,
-            true_center_coord=(541, 360),  # 실제 빔 중심
+            true_center_coord=(541, 361),  # 실제 빔 중심
             roi_size=roi_size,
             temporal_window=self.input_channels,  # 모델의 입력 채널 수 사용
             shift_range_x=shift_x,

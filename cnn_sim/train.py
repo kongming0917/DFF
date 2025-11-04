@@ -11,7 +11,7 @@ import os
 import sys
 import time
 import json
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 import matplotlib
 # GUI 환경 확인 후 백엔드 설정
@@ -38,7 +38,7 @@ class DVSFixedGTTrainer:
         self,
         model_name: str,
         individual_frames: List[np.ndarray],  # 개별 프레임
-        true_center_coord: Tuple[int, int] = (541, 360),  # 필터로 찾은 정확한 중심
+        true_center_coord: Tuple[int, int] = (541, 361),  # 필터로 찾은 정확한 중심
         roi_size: Tuple[int, int] = (512, 512),
         temporal_window: int = 5,  # 다중 채널 수
         device: str = 'auto',
@@ -79,8 +79,7 @@ class DVSFixedGTTrainer:
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=8, verbose=True
-        )
+            self.optimizer, mode='min', factor=0.5, patience=8)
         
         # 유틸리티 클래스들
         self.early_stopping = EarlyStopping(patience=patience, verbose=True)
@@ -410,69 +409,6 @@ class DVSFixedGTTrainer:
             traceback.print_exc()
 
 
-def load_events_from_bin(bin_file_path: str, max_events: Optional[int] = None) -> List[Tuple[int, int, int, int]]:
-    """
-    실제 DVS bin 파일에서 이벤트 리스트 로드
-    """
-    print(f"📖 Loading events from {bin_file_path}")
-    
-    # DVS bin 파일이 존재하는지 확인
-    if not os.path.exists(bin_file_path):
-        print(f"❌ Bin file not found: {bin_file_path}")
-        print("🔄 Using dummy events for testing...")
-        return _create_dummy_events(max_events or 10000)
-    
-    try:
-        # 실제 DVS bin 파일 로딩
-        # BinProcessor는 모듈 레벨에서 이미 import됨
-        
-        # BinProcessor 사용하여 이벤트 로드 (메모리 최적화)
-        processor = BinProcessor(960, 720, has_header=True)
-        
-        # 최대 프레임 수 제한 (메모리 보호)
-        max_frames_limit = 1000 if max_events is None else min(1000, max_events // 50)
-        frames = processor.read_frames(bin_file_path, max_frames=max_frames_limit)
-        
-        print(f"   Loaded {len(frames)} frames from bin file (limited for memory)")
-        
-        # 프레임에서 이벤트 추출 (효율적인 방식)
-        events = []
-        target_events = max_events or 50000  # 기본 최대값 설정
-        
-        for frame_idx, frame in enumerate(frames):
-            if len(events) >= target_events:
-                break
-                
-            # 프레임에서 이벤트 좌표 추출
-            frame_data = frame.raw_data
-            y_coords, x_coords = np.nonzero(frame_data)
-            
-            timestamp = frame.header.timestamp if hasattr(frame.header, 'timestamp') else frame_idx * 10000
-            
-            # 배치로 이벤트 추가 (더 효율적)
-            batch_events = []
-            for x, y in zip(x_coords, y_coords):
-                if len(events) + len(batch_events) >= target_events:
-                    break
-                # 폴라리티는 실제 데이터에 따라 조정
-                polarity = 1 if frame_data[y, x] == 1 else 0
-                batch_events.append((int(x), int(y), int(timestamp), int(polarity)))
-            
-            events.extend(batch_events)
-            
-            # 메모리 사용량 모니터링
-            if frame_idx % 100 == 0:
-                print(f"   Progress: {frame_idx+1}/{len(frames)} frames, {len(events)} events extracted")
-        
-        print(f"   Extracted {len(events)} events from frames")
-        return events
-        
-    except Exception as e:
-        print(f"⚠️ Error loading bin file: {e}")
-        print("🔄 Falling back to dummy events...")
-        return _create_dummy_events(max_events or 10000)
-
-
 def load_individual_frames_from_bin(bin_file_path: str, max_frames: Optional[int] = None) -> List[np.ndarray]:
     """DVS bin 파일에서 개별 프레임 로딩"""
     print(f"📖 Loading individual frames from {bin_file_path}")
@@ -555,69 +491,62 @@ def _create_dummy_individual_frames(num_frames: int, center: tuple = (480, 294))
 
 
 def train_fixed_gt_model(
-    model_name: str,
+    config: Dict[str, Any],
     bin_file_path: str,
-    config_overrides: Optional[Dict] = None
+    lr: Optional[float] = None,
+    true_center_coord: Optional[Tuple[int, int]] = None
 ):
-    """Fixed GT 방식으로 모델 훈련"""
+    """Fixed GT 방식으로 모델 훈련 (config 딕셔너리 직접 사용)"""
     
-    # 기본 설정 (간소화)
-    default_config = {
-        'lr': 0.001,
-        'batch_size': 8,
-        'num_epochs': 50,
-        'patience': 10,
-        'max_frames': 150,  # 개별 프레임 수
-        'temporal_window': 5,  # 다중 채널 수
-        'true_center_coord': (541, 360),  # 실제 빔 중심 좌표
-        'roi_size': (512, 512),  # 빔 크기에 맞춘 ROI (512x512)
-        'shift_range_x': 50,  # X축 시프트 범위 (±픽셀) - 안전한 범위로 조정
-        'shift_range_y': 50,  # Y축 시프트 범위 (±픽셀) - 안전한 범위로 조정
-        'save_dir': f'checkpoints_{model_name}'
+    # 기본값 설정 (인자가 제공되지 않으면 기본값 사용)
+    default_lr = 0.001
+    default_center = (541, 361)  # 실제 빔 중심 좌표
+    
+    # 전체 설정 병합 (인자 > config > 기본값 순서로 우선순위)
+    full_config = {
+        **config,
+        'lr': lr if lr is not None else config.get('lr', default_lr),
+        'true_center_coord': true_center_coord if true_center_coord is not None else config.get('true_center_coord', default_center),
+        'save_dir': f"checkpoints_{config['model_name']}"
     }
-    
-    # 설정 업데이트
-    if config_overrides:
-        default_config.update(config_overrides)
     
     # 개별 프레임 로드
     individual_frames = load_individual_frames_from_bin(
         bin_file_path, 
-        max_frames=default_config['max_frames']
+        max_frames=full_config.get('max_frames')
     )
     
     # 체크포인트 디렉토리 생성
-    os.makedirs(default_config['save_dir'], exist_ok=True)
+    os.makedirs(full_config['save_dir'], exist_ok=True)
     
     # 훈련 설정 저장
-    config_path = os.path.join(default_config['save_dir'], 'config.json')
+    config_path = os.path.join(full_config['save_dir'], 'config.json')
     with open(config_path, 'w') as f:
-        config_to_save = {
-            'model_name': model_name,
+        json.dump({
+            'model_name': config['model_name'],
             'bin_file_path': bin_file_path,
-            'training_config': default_config,
+            'training_config': full_config,
             'timestamp': datetime.now().isoformat()
-        }
-        json.dump(config_to_save, f, indent=2)
+        }, f, indent=2)
     
     # 트레이너 생성 및 훈련
     trainer = DVSFixedGTTrainer(
-        model_name=model_name,
-        individual_frames=individual_frames,  # 개별 프레임 전달
-        true_center_coord=(541, 360),  # 필터로 찾은 정확한 중심
-        roi_size=default_config['roi_size'],
-        lr=default_config['lr'],
-        batch_size=default_config['batch_size'],
-        num_epochs=default_config['num_epochs'],
-        patience=default_config['patience'],
-        save_dir=default_config['save_dir'],
-        temporal_window=default_config['temporal_window']  # 다중 채널 수
+        model_name=config['model_name'],
+        individual_frames=individual_frames,
+        true_center_coord=full_config['true_center_coord'],
+        roi_size=full_config['roi_size'],
+        lr=full_config['lr'],
+        batch_size=full_config['batch_size'],
+        num_epochs=full_config['num_epochs'],
+        patience=full_config['patience'],
+        save_dir=full_config['save_dir'],
+        temporal_window=full_config['temporal_window']
     )
     
-    # 데이터셋 파라미터 (X/Y별 시프트만 전달, 나머지는 트레이너에서 처리)
+    # 데이터셋 파라미터
     dataset_params = {
-        'shift_range_x': default_config['shift_range_x'],
-        'shift_range_y': default_config['shift_range_y']
+        'shift_range_x': full_config['shift_range_x'],
+        'shift_range_y': full_config['shift_range_y']
     }
     
     trainer.train(**dataset_params)
@@ -632,6 +561,10 @@ if __name__ == "__main__":
     
     # 실제 DVS 데이터 파일 경로
     BIN_FILE_PATH = "/hai/home/jdj/dvs/data/gaussian_large.bin"
+    
+    # 학습 하이퍼파라미터 설정
+    LEARNING_RATE = 0.001  # 학습률
+    TRUE_CENTER_COORD = (541, 361)  # 실제 빔 중심 좌표
     
     # 파일 존재 확인
     if not os.path.exists(BIN_FILE_PATH):
@@ -677,21 +610,12 @@ if __name__ == "__main__":
     print(f"   시프트 범위: X(±{config['shift_range_x']}), Y(±{config['shift_range_y']})")
     
     try:
-        # Fixed GT 모델 학습 실행
+        # Fixed GT 모델 학습 실행 (config 딕셔너리 직접 전달)
         trainer = train_fixed_gt_model(
-            model_name=config['model_name'],
+            config=config,
             bin_file_path=BIN_FILE_PATH,
-            config_overrides={
-                'max_frames': config['max_frames'],
-                'temporal_window': config['temporal_window'],
-                'num_epochs': config['num_epochs'],
-                'batch_size': config['batch_size'],
-                'patience': config['patience'],
-                'true_center_coord': (541, 360),  # 실제 빔 중심 좌표
-                'roi_size': config['roi_size'],
-                'shift_range_x': config['shift_range_x'],
-                'shift_range_y': config['shift_range_y']
-            }
+            lr=LEARNING_RATE,
+            true_center_coord=TRUE_CENTER_COORD
         )
         
         print(f"\n✅ {config['model_name']} 모델 학습 완료!")
@@ -713,9 +637,3 @@ if __name__ == "__main__":
         print(f"\n❌ 학습 중 오류 발생: {e}")
         import traceback
         traceback.print_exc()
-        
-        print(f"\n💡 문제 해결 방법:")
-        print(f"   1. GPU 메모리 부족: 배치 크기를 더 줄여보세요 (batch_size=2)")
-        print(f"   2. 데이터 로딩 오류: bin 파일 경로를 확인하세요")
-        print(f"   3. 의존성 오류: filter_sim 모듈이 설치되었는지 확인하세요")
-        print(f"   4. 더미 데이터로 테스트: max_events=1000으로 줄여서 테스트")

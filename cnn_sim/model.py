@@ -6,7 +6,8 @@ DVS 레이저 중심점 탐지를 위한 경량 CNN 모델들
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.models as models
+import torchvision.models as models 
+from torchvision.models import MobileNet_V2_Weights
 from typing import Tuple, Dict, Any
 
 class BasicCNN(nn.Module):
@@ -140,7 +141,9 @@ class MobileNetV2Regressor(nn.Module):
         super(MobileNetV2Regressor, self).__init__()
         
         # MobileNetV2 특징 추출기 로드
-        self.backbone = models.mobilenet_v2(pretrained=pretrained)
+        #self.backbone = models.mobilenet_v2(pretrained=pretrained)
+        weights = MobileNet_V2_Weights.IMAGENET1K_V1 if pretrained else None
+        self.backbone = models.mobilenet_v2(weights=weights)
         
         # 입력 채널 수 조정 (RGB 3채널 → temporal 채널 수)
         if input_channels != 3:
@@ -224,7 +227,9 @@ class MobileNetV2LightRegressor(nn.Module):
         super(MobileNetV2LightRegressor, self).__init__()
         
         # MobileNetV2 특징 추출기 로드
-        self.backbone = models.mobilenet_v2(pretrained=pretrained)
+        #self.backbone = models.mobilenet_v2(pretrained=pretrained)
+        weights = MobileNet_V2_Weights.IMAGENET1K_V1 if pretrained else None
+        self.backbone = models.mobilenet_v2(weights=weights)
         
         # 입력 채널 수 조정 (RGB 3채널 → temporal 채널 수)
         if input_channels != 3:

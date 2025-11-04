@@ -119,7 +119,7 @@ train_loader, val_loader = create_train_val_loaders(
     individual_frames=individual_frames,
     train_ratio=0.8,
     batch_size=8,
-    true_center_coord=(541, 360),  # 외부 고정 GT 좌표
+    true_center_coord=(541, 361),  # 외부 고정 GT 좌표
     roi_size=(512, 512),            # ROI 크기
     temporal_window=5,              # 시간 윈도우 크기
     shift_range_x=50,               # X축 시프트 범위 (±픽셀)
@@ -135,7 +135,7 @@ from dataset import DVSFixedGTDataset
 # 데이터셋 생성
 dataset = DVSFixedGTDataset(
     individual_frames=individual_frames,
-    true_center_coord=(541, 360),    # 외부 고정 GT 좌표
+    true_center_coord=(541, 361),    # 외부 고정 GT 좌표
     roi_size=(512, 512),             # ROI 크기
     temporal_window=5,               # 시간 윈도우
     shift_range_x=50,                # X축 시프트 범위
@@ -214,7 +214,7 @@ for frame in frames:
 # 신규: 외부 고정 GT 사용
 dataset = DVSFixedGTDataset(
     individual_frames=frames,
-    true_center_coord=(541, 360),  # 외부에서 주입된 고정 GT
+    true_center_coord=(541, 361),  # 외부에서 주입된 고정 GT
     roi_size=(512, 512),            # ROI 기반 처리
     # 실시간 필터링 로직 완전 제거!
 )

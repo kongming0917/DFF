@@ -257,7 +257,7 @@ def main():
     print("\n🎯 데이터셋 생성...")
     dataset = DVSFixedGTDataset(
         individual_frames=individual_frames,
-        true_center_coord=(541, 360),  # 실제 빔 중심
+        true_center_coord=(541, 361),  # 실제 빔 중심
         roi_size=(512, 512),
         temporal_window=1,  # 단일 프레임
         shift_range_x=80,
