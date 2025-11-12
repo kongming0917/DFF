@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-CNN (MobileNet) vs YOLO vs Filter (Kalman) 중심값 추정 결과 비교 스크립트
+CNN vs YOLO vs Filter 비교 스크립트 (Brownian Motion 데이터셋)
 
-cnn_sim의 MobileNet 모델 추론 결과, 
-yolo_sim의 YOLOv3-Tiny 모델 추론 결과, 그리고
-filter_sim의 spatial_filter_kalman 중심점 추정 결과를 비교 분석합니다.
+Brownian motion 데이터셋에 대해:
+- cnn_brownian_sim의 MobileNet 모델 추론 결과
+- yolo_brownian_sim의 YOLOv3-Tiny 모델 추론 결과
+- filter_brownian_sim의 중심점 추정 결과
+를 비교 분석합니다.
+
+정답 데이터는 CSV 파일(gaussian_brownian_512x512_labels.csv)에서 로드합니다.
 """
 
 import numpy as np
@@ -17,95 +21,326 @@ import sys
 from typing import Dict, Tuple, Optional
 
 # 경로 추가
-sys.path.append('/hai/home/jdj/dvs')  # lib 모듈 사용을 위해 루트 추가
-sys.path.append('/hai/home/jdj/dvs/cnn_sim')
-sys.path.append('/hai/home/jdj/dvs/filter_sim')
-sys.path.append('/hai/home/jdj/dvs/yolo_sim')
+sys.path.append('/hai/home/jdj/dvs')
+sys.path.append('/hai/home/jdj/dvs/cnn_brownian_sim')
+sys.path.append('/hai/home/jdj/dvs/filter_brownian_sim')
+sys.path.append('/hai/home/jdj/dvs/yolo_brownian_sim')
 
-from cnn_sim.inference import DVSInference
-from lib.bin_processor import BinProcessor  # lib에서 가져오기
-from yolo_sim.inference import LaserYOLOInference
-from yolo_sim.dataset import load_frames_from_bin as yolo_load_frames
+from cnn_brownian_sim.inference import DVSInference
+from lib.bin_processor import BinProcessor
+from yolo_brownian_sim.inference import LaserYOLOInference
+from yolo_brownian_sim.dataset import load_frames_from_bin as yolo_load_frames
+
+
+def load_ground_truth(csv_path: str) -> pd.DataFrame:
+    """정답 CSV 파일 로드"""
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"Ground truth file not found: {csv_path}")
+    
+    df = pd.read_csv(csv_path)
+    print(f"📂 Loaded {len(df)} ground truth records")
+    return df
 
 
 def load_cnn_predictions(
     checkpoint_path: str,
     bin_file_path: str,
-    max_frames: int = 50,
-    test_augmentation: bool = True
+    csv_labels_path: str,
+    max_frames: int = 50
 ) -> Dict:
-    """CNN 모델의 추론 결과 로드 (상대 좌표를 절대 좌표로 변환)"""
+    """CNN 모델의 추론 결과 로드 (정규화 좌표를 ROI 내부 절대 좌표로 변환)"""
     print("🤖 Loading CNN (MobileNet) predictions...")
     
     # Inference 객체 생성
     inferencer = DVSInference(checkpoint_path)
     
-    # 프레임 로드
-    individual_frames = inferencer.load_frames_from_bin(bin_file_path, max_frames=max_frames)
+    # 프레임 로드 (512x512 ROI) - BinProcessor는 512x512로 설정
+    processor = BinProcessor(frame_width=512, frame_height=512, has_header=True)
+    frames = processor.read_frames(bin_file_path, max_frames=max_frames)
+    
+    # numpy 배열로 변환 및 정규화
+    individual_frames = []
+    for frame in frames:
+        frame_array = np.array(frame.raw_data, dtype=np.float32)
+        if np.max(frame_array) > 0:
+            frame_array = frame_array / np.max(frame_array)  # 0-1 정규화
+        individual_frames.append(frame_array)
+    
+    print(f"   Loaded {len(individual_frames)} frames")
+    
+    # 정답 데이터 로드
+    gt_df = load_ground_truth(csv_labels_path)
+    
+    # 데이터셋 생성 (Brownian motion용)
+    from cnn_brownian_sim.dataset import DVSBrownianDataset
+    dataset = DVSBrownianDataset(
+        individual_frames=individual_frames,
+        csv_labels_path=csv_labels_path,
+        roi_size=(512, 512),
+        temporal_window=5
+    )
+    dataset.set_training_mode(False)
     
     # 추론 실행
-    results = inferencer.predict_from_frames(
-        individual_frames, 
-        test_augmentation=test_augmentation
-    )
+    predictions_rel = []
+    targets_rel = []
     
-    # 상대 좌표를 절대 좌표로 변환
+    with torch.no_grad():
+        for i in range(len(dataset)):
+            sample_input, sample_label = dataset[i]
+            input_tensor = sample_input.unsqueeze(0).to(inferencer.device)
+            
+            output = inferencer.model(input_tensor)
+            pred_rel = output[0].cpu().numpy()
+            target_rel = sample_label.numpy()
+            
+            predictions_rel.append(pred_rel)
+            targets_rel.append(target_rel)
+    
+    # 정규화 좌표(0-1)를 ROI 내부 절대 좌표로 변환
     roi_size = 512
-    true_center_coord = (541, 361)
+    predictions_abs = np.array(predictions_rel) * roi_size
+    targets_abs = np.array(targets_rel) * roi_size
     
-    predictions_rel = np.array(results['predictions'])
-    targets_rel = np.array(results['targets'])
-    
-    predictions_abs = []
-    targets_abs = []
-    
-    for pred_rel, target_rel in zip(predictions_rel, targets_rel):
-        # 예측값 변환: 상대 좌표 → 절대 좌표
-        pred_x_abs = true_center_coord[0] + (pred_rel[0] - 0.5) * roi_size
-        pred_y_abs = true_center_coord[1] + (pred_rel[1] - 0.5) * roi_size
-        
-        # 타겟값 변환: 상대 좌표 → 절대 좌표
-        target_x_abs = true_center_coord[0] + (target_rel[0] - 0.5) * roi_size
-        target_y_abs = true_center_coord[1] + (target_rel[1] - 0.5) * roi_size
-        
-        predictions_abs.append((pred_x_abs, pred_y_abs))
-        targets_abs.append((target_x_abs, target_y_abs))
-    
-    # 오차 계산 (절대 좌표 기준)
-    errors = np.sqrt(np.sum((np.array(predictions_abs) - np.array(targets_abs))**2, axis=1))
+    # 오차 계산
+    errors = np.sqrt(np.sum((predictions_abs - targets_abs)**2, axis=1))
     mean_error = np.mean(errors)
     std_error = np.std(errors)
     
     print(f"✅ CNN predictions loaded: {len(predictions_abs)} samples")
-    print(f"   Mean error: {mean_error:.2f}±{std_error:.2f}")
+    print(f"   Mean error: {mean_error:.2f}±{std_error:.2f} pixels")
     
     return {
-        'predictions': np.array(predictions_abs),
-        'targets': np.array(targets_abs),
+        'predictions': predictions_abs,
+        'targets': targets_abs,
         'mean_error': mean_error,
         'std_error': std_error,
         'method': 'CNN (MobileNet)'
     }
 
 
-def load_filter_predictions(csv_file_path: str) -> Dict:
-    """Filter (Kalman) 결과를 CSV에서 로드"""
-    print("🔍 Loading Filter (Kalman) predictions...")
+def load_yolo_predictions(
+    checkpoint_path: str,
+    bin_file_path: str,
+    csv_labels_path: str,
+    max_frames: int = 50,
+    conf_threshold: float = 0.5
+) -> Dict:
+    """YOLO 모델의 추론 결과 로드"""
+    print("🎯 Loading YOLO predictions...")
+    
+    # YOLO Inference 객체 생성
+    inferencer = LaserYOLOInference(checkpoint_path)
+    
+    # 프레임 로드 (512x512 ROI)
+    individual_frames = yolo_load_frames(bin_file_path, max_frames=max_frames)
+    
+    # 데이터셋 생성 (Brownian motion용)
+    from yolo_brownian_sim.dataset import LaserYOLOBrownianDataset
+    from yolo_brownian_sim.model import decode_predictions, get_laser_center
+    
+    dataset = LaserYOLOBrownianDataset(
+        individual_frames=individual_frames,
+        csv_labels_path=csv_labels_path,
+        laser_diameter=400,
+        roi_size=(512, 512),
+        temporal_window=5
+    )
+    dataset.set_training_mode(False)
+    
+    # 추론 실행
+    predictions_rel = []
+    targets_rel = []
+    detection_status = []  # YOLO 감지 성공/실패 기록
+    frame_info = []  # 각 샘플의 프레임 인덱스 정보
+    
+    print(f"   Dataset length: {len(dataset)} samples")
+    print(f"   Temporal window: 5")
+    print(f"   Last sample idx: {len(dataset)-1}")
+    print(f"   Last sample uses frames: {len(dataset)-1} to {len(dataset)-1 + 4}")
+    
+    with torch.no_grad():
+        for idx in range(len(dataset)):
+            image, target = dataset[idx]
+            image = image.unsqueeze(0).to(inferencer.device)
+            
+            # 정답 저장 (bbox 중심점)
+            targets_rel.append((target[0].item(), target[1].item()))
+            
+            # Temporal window 프레임 정보 확인
+            # 실제 dataset의 __getitem__에서 사용하는 frame_indices 계산
+            frame_indices = list(range(idx, idx + 5))  # temporal_window=5
+            center_frame_idx = frame_indices[2]  # 중앙 프레임 (idx + temporal_window//2)
+            frame_info.append({
+                'sample_idx': idx,
+                'center_frame_idx': center_frame_idx,
+                'frame_range': (frame_indices[0], frame_indices[-1]),
+                'all_frames_valid': all(f < len(individual_frames) for f in frame_indices)
+            })
+            
+            # 예측
+            output = inferencer.model(image)
+            boxes_list, scores_list = decode_predictions(
+                output, inferencer.anchors, conf_threshold=conf_threshold
+            )
+            
+            # 중심점 추출
+            detection_success = False
+            detected_boxes_info = None
+            if len(boxes_list[0]) > 0:
+                center = get_laser_center(boxes_list[0], scores_list[0])
+                if center:
+                    predictions_rel.append((center[0], center[1]))
+                    detection_success = True
+                    # 디버그: 감지된 모든 박스 정보 저장 (특히 70-85 범위)
+                    if 70 <= idx <= 85:
+                        detected_boxes_info = {
+                            'num_boxes': len(boxes_list[0]),
+                            'all_boxes': boxes_list[0].cpu().numpy(),
+                            'all_scores': scores_list[0].cpu().numpy(),
+                            'selected_center': center,
+                            'selected_idx': torch.argmax(scores_list[0]).item()
+                        }
+                else:
+                    # 실패 시 이전 프레임 값 사용
+                    if len(predictions_rel) > 0:
+                        predictions_rel.append(predictions_rel[-1])
+                    else:
+                        predictions_rel.append((0.5, 0.5))  # 첫 프레임 실패 시 ROI 중심
+                    detection_success = False
+            else:
+                # 실패 시 이전 프레임 값 사용
+                if len(predictions_rel) > 0:
+                    predictions_rel.append(predictions_rel[-1])
+                else:
+                    predictions_rel.append((0.5, 0.5))  # 첫 프레임 실패 시 ROI 중심
+                detection_success = False
+            
+            detection_status.append({
+                'sample_idx': idx,
+                'detection_success': detection_success,
+                'used_previous': not detection_success and len(predictions_rel) > 1,
+                'boxes_info': detected_boxes_info
+            })
+    
+    # 정규화 좌표(0-1)를 ROI 내부 절대 좌표로 변환
+    roi_size = 512
+    predictions_abs = np.array(predictions_rel) * roi_size
+    targets_abs = np.array(targets_rel) * roi_size
+    
+    # 오차 계산
+    errors = np.sqrt(np.sum((predictions_abs - targets_abs)**2, axis=1))
+    mean_error = np.mean(errors)
+    std_error = np.std(errors)
+    
+    # 마지막 10개 샘플 상세 분석
+    print(f"\n🔍 Analyzing last 10 samples:")
+    last_n = min(10, len(errors))
+    for i in range(len(errors) - last_n, len(errors)):
+        status = detection_status[i]
+        info = frame_info[i]
+        error = errors[i]
+        pred = predictions_abs[i]
+        target = targets_abs[i]
+        print(f"   Sample {i:3d}: Error={error:6.2f}px, "
+              f"CenterFrame={info['center_frame_idx']:3d}, "
+              f"Detected={status['detection_success']}, "
+              f"Pred=({pred[0]:6.1f},{pred[1]:6.1f}), "
+              f"GT=({target[0]:6.1f},{target[1]:6.1f})")
+    
+    # 오류 급증 지점 찾기
+    error_threshold = np.mean(errors) + 3 * np.std(errors)  # 평균 + 3*표준편차
+    spike_indices = np.where(errors > error_threshold)[0]
+    if len(spike_indices) > 0:
+        print(f"\n⚠️  Error spikes detected (>{error_threshold:.1f}px):")
+        for spike_idx in spike_indices:
+            status = detection_status[spike_idx]
+            info = frame_info[spike_idx]
+            error = errors[spike_idx]
+            pred = predictions_abs[spike_idx]
+            target = targets_abs[spike_idx]
+            print(f"   Sample {spike_idx:3d}: Error={error:6.2f}px, "
+                  f"CenterFrame={info['center_frame_idx']:3d}, "
+                  f"Detected={status['detection_success']}, "
+                  f"UsedPrevious={status.get('used_previous', False)}")
+            print(f"      Pred=({pred[0]:6.1f},{pred[1]:6.1f}), "
+                  f"GT=({target[0]:6.1f},{target[1]:6.1f}), "
+                  f"Diff=({target[0]-pred[0]:6.1f},{target[1]-pred[1]:6.1f})")
+    
+    # 70-85 범위 샘플들 상세 분석 (오류 급증 구간)
+    print(f"\n🔍 Detailed analysis of samples 70-85 (error spike region):")
+    for i in range(70, min(86, len(errors))):
+        status = detection_status[i]
+        info = frame_info[i]
+        error = errors[i]
+        pred = predictions_abs[i]
+        target = targets_abs[i]
+        print(f"   Sample {i:3d}: Error={error:6.2f}px, "
+              f"CenterFrame={info['center_frame_idx']:3d}, "
+              f"Frames={info['frame_range'][0]}-{info['frame_range'][1]}, "
+              f"AllValid={info['all_frames_valid']}, "
+              f"Detected={status['detection_success']}, "
+              f"Pred=({pred[0]:6.1f},{pred[1]:6.1f}), "
+              f"GT=({target[0]:6.1f},{target[1]:6.1f})")
+        
+        # 오류가 큰 샘플의 박스 정보 출력
+        if status.get('boxes_info') is not None and error > 50:
+            boxes_info = status['boxes_info']
+            print(f"      🔍 Detected {boxes_info['num_boxes']} boxes:")
+            for box_idx, (box, score) in enumerate(zip(boxes_info['all_boxes'], boxes_info['all_scores'])):
+                box_abs = box * 512  # 절대 좌표로 변환
+                marker = "★" if box_idx == boxes_info['selected_idx'] else " "
+                print(f"         {marker} Box {box_idx}: center=({box_abs[0]:6.1f},{box_abs[1]:6.1f}), "
+                      f"size=({box_abs[2]:6.1f},{box_abs[3]:6.1f}), conf={score:.3f}")
+    
+    print(f"\n✅ YOLO predictions loaded: {len(predictions_abs)} samples")
+    print(f"   Mean error: {mean_error:.2f}±{std_error:.2f} pixels")
+    print(f"   Detection success rate: {sum(s['detection_success'] for s in detection_status) / len(detection_status) * 100:.1f}%")
+    
+    return {
+        'predictions': predictions_abs,
+        'targets': targets_abs,
+        'mean_error': mean_error,
+        'std_error': std_error,
+        'method': 'YOLO (Tiny)'
+    }
+
+
+def load_filter_predictions(
+    csv_file_path: str,
+    ground_truth_csv: str
+) -> Dict:
+    """Filter 결과를 CSV에서 로드하고 정답과 비교"""
+    print("🔍 Loading Filter predictions...")
     
     if not os.path.exists(csv_file_path):
-        raise FileNotFoundError(f"CSV file not found: {csv_file_path}")
+        raise FileNotFoundError(f"Filter CSV file not found: {csv_file_path}")
     
-    # CSV 로드
-    df = pd.read_csv(csv_file_path)
-    df = df.dropna()  # 유효한 데이터만
+    # Filter 예측 CSV 로드
+    pred_df = pd.read_csv(csv_file_path)
+    pred_df = pred_df.dropna()  # 유효한 데이터만
     
-    # predictions 형식으로 변환
-    predictions = df[['center_x', 'center_y']].values
+    # 정답 CSV 로드
+    gt_df = load_ground_truth(ground_truth_csv)
     
-    # filter의 경우 고정된 ground truth와 비교
-    # cnn_sim과 동일한 true_center_coord 사용
-    true_center = np.array([541, 361])
-    targets = np.tile(true_center, (len(predictions), 1))
+    # 데이터 병합 (frame_number와 frame_idx 기준)
+    merged = pd.merge(
+        pred_df,
+        gt_df,
+        left_on='frame_number',
+        right_on='frame_idx',
+        how='inner'
+    )
+    
+    # 유효한 데이터만
+    valid = merged.dropna(subset=['center_x', 'center_y', 'roi_center_x', 'roi_center_y'])
+    
+    if len(valid) == 0:
+        raise ValueError("No valid merged data found. Check frame_number/frame_idx matching.")
+    
+    # predictions와 targets 추출
+    predictions = valid[['center_x', 'center_y']].values
+    targets = valid[['roi_center_x', 'roi_center_y']].values
     
     # 오차 계산
     errors = np.sqrt(np.sum((predictions - targets)**2, axis=1))
@@ -113,7 +348,7 @@ def load_filter_predictions(csv_file_path: str) -> Dict:
     std_error = np.std(errors)
     
     print(f"✅ Filter predictions loaded: {len(predictions)} samples")
-    print(f"   Mean error: {mean_error:.2f}±{std_error:.2f}")
+    print(f"   Mean error: {mean_error:.2f}±{std_error:.2f} pixels")
     
     return {
         'predictions': predictions,
@@ -121,75 +356,6 @@ def load_filter_predictions(csv_file_path: str) -> Dict:
         'mean_error': mean_error,
         'std_error': std_error,
         'method': 'Filter (Kalman)'
-    }
-
-
-def load_yolo_predictions(
-    checkpoint_path: str,
-    bin_file_path: str,
-    max_frames: int = 50,
-    conf_threshold: float = 0.5
-) -> Dict:
-    """YOLO 모델의 추론 결과 로드 (상대 좌표를 절대 좌표로 변환)"""
-    print("🎯 Loading YOLO predictions...")
-    
-    # YOLO Inference 객체 생성
-    inferencer = LaserYOLOInference(checkpoint_path)
-    
-    # 프레임 로드
-    individual_frames = yolo_load_frames(bin_file_path, max_frames=max_frames)
-    
-    # ROI 파라미터 설정
-    roi_params = {
-        'true_center_coord': (541, 361),
-        'laser_diameter': 400,
-        'roi_size': (512, 512),
-        'temporal_window': 5,
-        'shift_range_x': 0,  # 공정한 비교를 위해 증강 비활성화
-        'shift_range_y': 0
-    }
-    
-    # 추론 실행
-    predictions_rel, targets_rel = inferencer.predict(
-        frames=individual_frames,
-        roi_params=roi_params,
-        conf_threshold=conf_threshold,
-        return_targets=True
-    )
-    
-    # 상대 좌표를 절대 좌표로 변환
-    roi_size = 512
-    true_center_coord = (541, 361)
-    
-    predictions_abs = []
-    targets_abs = []
-    
-    for pred_rel, target_rel in zip(predictions_rel, targets_rel):
-        # 예측값 변환: 상대 좌표 → 절대 좌표
-        pred_x_abs = true_center_coord[0] + (pred_rel[0] - 0.5) * roi_size
-        pred_y_abs = true_center_coord[1] + (pred_rel[1] - 0.5) * roi_size
-        
-        # 타겟값 변환: 상대 좌표 → 절대 좌표
-        target_x_abs = true_center_coord[0] + (target_rel[0] - 0.5) * roi_size
-        target_y_abs = true_center_coord[1] + (target_rel[1] - 0.5) * roi_size
-        
-        predictions_abs.append((pred_x_abs, pred_y_abs))
-        targets_abs.append((target_x_abs, target_y_abs))
-    
-    # 오차 계산 (절대 좌표 기준)
-    errors = np.sqrt(np.sum((np.array(predictions_abs) - np.array(targets_abs))**2, axis=1))
-    mean_error = np.mean(errors)
-    std_error = np.std(errors)
-    
-    print(f"✅ YOLO predictions loaded: {len(predictions_abs)} samples")
-    print(f"   Mean error: {mean_error:.2f}±{std_error:.2f}")
-    
-    return {
-        'predictions': np.array(predictions_abs),
-        'targets': np.array(targets_abs),
-        'mean_error': mean_error,
-        'std_error': std_error,
-        'method': 'YOLO (Tiny)'
     }
 
 
@@ -211,13 +377,24 @@ def compare_methods(
     filter_pred = filter_results['predictions']
     filter_target = filter_results['targets']
     
+    # 샘플 수 맞추기 (최소값 기준)
+    min_samples = min(len(cnn_pred), len(yolo_pred), len(filter_pred))
+    cnn_pred = cnn_pred[:min_samples]
+    cnn_target = cnn_target[:min_samples]
+    yolo_pred = yolo_pred[:min_samples]
+    yolo_target = yolo_target[:min_samples]
+    filter_pred = filter_pred[:min_samples]
+    filter_target = filter_target[:min_samples]
+    
+    print(f"   Using {min_samples} samples for comparison")
+    
     # 오차 계산
     cnn_errors = np.sqrt(np.sum((cnn_pred - cnn_target)**2, axis=1))
     yolo_errors = np.sqrt(np.sum((yolo_pred - yolo_target)**2, axis=1))
     filter_errors = np.sqrt(np.sum((filter_pred - filter_target)**2, axis=1))
     
     # 그래프 생성
-    fig = plt.figure(figsize=(20, 12))
+    fig = fig = plt.figure(figsize=(20, 12))
     gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
     
     # ========== 1. X 좌표 분포도 비교 ==========
@@ -283,25 +460,18 @@ def compare_methods(
     
     # ========== 4. 2D 궤적 비교 (X-Y 평면) ==========
     ax4 = fig.add_subplot(gs[1, 0])
-    ax4.scatter(cnn_pred[:, 0], cnn_pred[:, 1], 
-               alpha=0.6, s=40, label='CNN', c='blue', edgecolors='navy')
-    ax4.scatter(yolo_pred[:, 0], yolo_pred[:, 1], 
-               alpha=0.6, s=40, label='YOLO', c='green', edgecolors='darkgreen')
-    ax4.scatter(filter_pred[:, 0], filter_pred[:, 1], 
-               alpha=0.6, s=40, label='Filter', c='red', edgecolors='darkred')
-    
-    # Ground truth 중심
-    true_center_x = np.mean(cnn_target[:, 0])
-    true_center_y = np.mean(cnn_target[:, 1])
-    ax4.scatter(true_center_x, true_center_y, 
-               s=200, marker='*', c='gold', edgecolors='black', 
-               linewidths=2, label='True Center', zorder=10)
+    # Brownian motion은 시간에 따라 움직이므로 궤적을 선으로 표시
+    ax4.plot(cnn_target[:, 0], cnn_target[:, 1], 'b-', alpha=0.6, linewidth=2, label='GT Trajectory', marker='o', markersize=3)
+    ax4.plot(cnn_pred[:, 0], cnn_pred[:, 1], 'b--', alpha=0.6, linewidth=1, label='CNN Pred', marker='x', markersize=2)
+    ax4.plot(yolo_pred[:, 0], yolo_pred[:, 1], 'g--', alpha=0.6, linewidth=1, label='YOLO Pred', marker='x', markersize=2)
+    ax4.plot(filter_pred[:, 0], filter_pred[:, 1], 'r--', alpha=0.6, linewidth=1, label='Filter Pred', marker='x', markersize=2)
     
     ax4.set_xlabel('X Coordinate', fontsize=11)
     ax4.set_ylabel('Y Coordinate', fontsize=11)
     ax4.set_title('2D Trajectory Comparison', fontsize=12, fontweight='bold')
-    ax4.legend()
+    ax4.legend(fontsize=8)
     ax4.grid(True, alpha=0.3)
+    ax4.set_aspect('equal')
     
     # ========== 5. 오차 박스플롯 ==========
     ax5 = fig.add_subplot(gs[1, 1])
@@ -402,7 +572,7 @@ def compare_methods(
     
     # ========== 전체 제목 ==========
     fig.suptitle(
-        f'CNN vs YOLO vs Filter Comparison\n'
+        f'CNN vs YOLO vs Filter Comparison (Brownian Motion)\n'
         f'CNN: {np.mean(cnn_errors):.2f}±{np.std(cnn_errors):.2f} px | '
         f'YOLO: {np.mean(yolo_errors):.2f}±{np.std(yolo_errors):.2f} px | '
         f'Filter: {np.mean(filter_errors):.2f}±{np.std(filter_errors):.2f} px',
@@ -414,7 +584,7 @@ def compare_methods(
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"✅ Full comparison plot saved to: {save_path}")
     
-    plt.show()
+    plt.close()
     
     # ========================================
     # 두 번째 이미지: 간소화 버전 (6개 그래프만)
@@ -465,28 +635,22 @@ def compare_methods(
     ax3.legend(fontsize=9)
     ax3.grid(True, alpha=0.3)
     
-    # ========== 4. 2D 궤적 비교 (X-Y 평면) ==========
+    # ========== 4. 2D 궤적 비교 ==========
     ax4 = fig2.add_subplot(gs2[1, 0])
-    ax4.scatter(cnn_pred[:, 0], cnn_pred[:, 1], 
-               alpha=0.6, s=40, label='CNN', c='blue', edgecolors='navy')
-    ax4.scatter(yolo_pred[:, 0], yolo_pred[:, 1], 
-               alpha=0.6, s=40, label='YOLO', c='green', edgecolors='darkgreen')
-    ax4.scatter(filter_pred[:, 0], filter_pred[:, 1], 
-               alpha=0.6, s=40, label='Filter', c='red', edgecolors='darkred')
-    ax4.scatter(true_center_x, true_center_y, 
-               s=200, marker='*', c='gold', edgecolors='black', 
-               linewidths=2, label='True Center', zorder=10)
+    ax4.plot(cnn_target[:, 0], cnn_target[:, 1], 'b-', alpha=0.6, linewidth=2, label='GT', marker='o', markersize=2)
+    ax4.plot(cnn_pred[:, 0], cnn_pred[:, 1], 'b--', alpha=0.6, linewidth=1, label='CNN', marker='x', markersize=1)
+    ax4.plot(yolo_pred[:, 0], yolo_pred[:, 1], 'g--', alpha=0.6, linewidth=1, label='YOLO', marker='x', markersize=1)
+    ax4.plot(filter_pred[:, 0], filter_pred[:, 1], 'r--', alpha=0.6, linewidth=1, label='Filter', marker='x', markersize=1)
     ax4.set_xlabel('X Coordinate', fontsize=11)
     ax4.set_ylabel('Y Coordinate', fontsize=11)
-    ax4.set_title('2D Trajectory Comparison', fontsize=12, fontweight='bold')
+    ax4.set_title('Trajectory Comparison', fontsize=12, fontweight='bold')
     ax4.legend()
     ax4.grid(True, alpha=0.3)
+    ax4.set_aspect('equal')
     
     # ========== 5. 오차 박스플롯 ==========
     ax5 = fig2.add_subplot(gs2[1, 1])
-    box_data = [cnn_errors, yolo_errors, filter_errors]
     box = ax5.boxplot(box_data, labels=['CNN', 'YOLO', 'Filter'], patch_artist=True)
-    colors = ['lightblue', 'lightgreen', 'lightcoral']
     for patch, color in zip(box['boxes'], colors):
         patch.set_facecolor(color)
     ax5.set_ylabel('Pixel Error', fontsize=11)
@@ -506,7 +670,7 @@ def compare_methods(
     
     # ========== 전체 제목 (간소화 버전) ==========
     fig2.suptitle(
-        f'CNN vs YOLO vs Filter Comparison (Compact)\n'
+        f'CNN vs YOLO vs Filter Comparison (Brownian Motion - Compact)\n'
         f'CNN: {np.mean(cnn_errors):.2f}±{np.std(cnn_errors):.2f} px | '
         f'YOLO: {np.mean(yolo_errors):.2f}±{np.std(yolo_errors):.2f} px | '
         f'Filter: {np.mean(filter_errors):.2f}±{np.std(filter_errors):.2f} px',
@@ -519,7 +683,7 @@ def compare_methods(
         plt.savefig(compact_save_path, dpi=300, bbox_inches='tight')
         print(f"✅ Compact comparison plot saved to: {compact_save_path}")
     
-    plt.show()
+    plt.close()
     
     # 추가 통계 출력
     print("\n" + "="*100)
@@ -561,66 +725,79 @@ def compare_methods(
 
 def main():
     """메인 함수"""
-    print("🎯 CNN vs YOLO vs Filter Comparison")
+    print("🎯 CNN vs YOLO vs Filter Comparison (Brownian Motion)")
     print("="*80)
     
     # 경로 설정
-    cnn_checkpoint = "/hai/home/jdj/dvs/cnn_sim/checkpoints_mobilenet_v2/mobilenet_best.pth"
-    yolo_checkpoint = "/hai/home/jdj/dvs/yolo_sim/checkpoints_yolo_tiny_laser/yolo_tiny_laser_best.pth"
-    filter_csv = "/hai/home/jdj/dvs/filter_sim/csv_results/spatial_filter_kalman.csv"
-    bin_file = "/hai/home/jdj/dvs/data/gaussian_large.bin"
-    output_path = "/hai/home/jdj/dvs/cnn_yolo_filter_comparison.png"
+    cnn_checkpoint = "/hai/home/jdj/dvs/cnn_brownian_sim/checkpoints_mobilenet_v2/mobilenet_best.pth"
+    yolo_checkpoint = "/hai/home/jdj/dvs/yolo_brownian_sim/checkpoints_yolo_tiny_laser_brownian/yolo_tiny_laser_brownian_best.pth"
+    filter_csv = "/hai/home/jdj/dvs/filter_brownian_sim/csv_results/spatial_filter_kalman.csv"
+    ground_truth_csv = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512_labels.csv"
+    bin_file = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512.bin"
+    output_path = "/hai/home/jdj/dvs/cnn_yolo_filter_comparison_brownian.png"
     
     # 파일 존재 확인
     if not os.path.exists(cnn_checkpoint):
         print(f"❌ CNN checkpoint not found: {cnn_checkpoint}")
+        print("   Please train CNN model first")
         return
     
     if not os.path.exists(yolo_checkpoint):
         print(f"❌ YOLO checkpoint not found: {yolo_checkpoint}")
+        print("   Please train YOLO model first")
         return
     
     if not os.path.exists(filter_csv):
         print(f"❌ Filter CSV not found: {filter_csv}")
+        print("   Please run: cd filter_brownian_sim && python export_center_data.py")
+        return
+    
+    if not os.path.exists(ground_truth_csv):
+        print(f"❌ Ground truth CSV not found: {ground_truth_csv}")
+        print("   Please generate Brownian motion dataset first")
         return
     
     if not os.path.exists(bin_file):
         print(f"❌ Bin file not found: {bin_file}")
+        print("   Please generate Brownian motion dataset first")
         return
     
     # CNN 결과 로드
     cnn_results = load_cnn_predictions(
         checkpoint_path=cnn_checkpoint,
         bin_file_path=bin_file,
-        max_frames=50,
-        test_augmentation=False  # 공정한 비교를 위해 증강 비활성화
+        csv_labels_path=ground_truth_csv,
+        max_frames=100
     )
     
     # YOLO 결과 로드
     yolo_results = load_yolo_predictions(
         checkpoint_path=yolo_checkpoint,
         bin_file_path=bin_file,
-        max_frames=50,
-        conf_threshold=0.3
+        csv_labels_path=ground_truth_csv,
+        max_frames=100,
+        conf_threshold=0.6
     )
     
     # Filter 결과 로드
-    filter_results = load_filter_predictions(filter_csv)
+    filter_results = load_filter_predictions(
+        csv_file_path=filter_csv,
+        ground_truth_csv=ground_truth_csv
+    )
     
-    # 샘플 수 맞추기 및 마지막 3개 제외 (temporal window 경계 문제 방지)
+    # 샘플 수 맞추기
     min_samples = min(len(cnn_results['predictions']), 
                      len(yolo_results['predictions']), 
                      len(filter_results['predictions']))
-    safe_samples = min_samples - 3  # 마지막 3개 제외 (안전 마진)
     
-    cnn_results['predictions'] = cnn_results['predictions'][:safe_samples]
-    cnn_results['targets'] = cnn_results['targets'][:safe_samples]
-    yolo_results['predictions'] = yolo_results['predictions'][:safe_samples]
-    yolo_results['targets'] = yolo_results['targets'][:safe_samples]
-    filter_results['predictions'] = filter_results['predictions'][:safe_samples]
-    filter_results['targets'] = filter_results['targets'][:safe_samples]
+    cnn_results['predictions'] = cnn_results['predictions'][:min_samples]
+    cnn_results['targets'] = cnn_results['targets'][:min_samples]
+    yolo_results['predictions'] = yolo_results['predictions'][:min_samples]
+    yolo_results['targets'] = yolo_results['targets'][:min_samples]
+    filter_results['predictions'] = filter_results['predictions'][:min_samples]
+    filter_results['targets'] = filter_results['targets'][:min_samples]
     
-    print(f"\n📊 Using {safe_samples} samples for comparison (excluded last 3 for stability)")
+    print(f"\n📊 Using {min_samples} samples for comparison")
     
     # 비교 시각화
     compare_methods(cnn_results, yolo_results, filter_results, save_path=output_path)
