@@ -364,6 +364,32 @@ class CenterPointExtractor(ABC):
     def __init__(self):
         self.center_point: Optional[np.ndarray] = None
 
+    @staticmethod
+    def _extract_all_events(frame: DVSFrame) -> np.ndarray:
+        """
+        프레임에서 모든 이벤트(ON + OFF)를 추출하는 공통 헬퍼 메서드
+        
+        Args:
+            frame: DVSFrame 객체
+            
+        Returns:
+            np.ndarray: (N, 2) 형태의 이벤트 좌표 배열. 이벤트가 없으면 빈 배열.
+        """
+        on_events = frame.get_on_events()
+        off_events = frame.get_off_events()
+        
+        # Combine ON and OFF events
+        if len(on_events) > 0 and len(off_events) > 0:
+            all_events = np.vstack([on_events, off_events])
+        elif len(on_events) > 0:
+            all_events = on_events
+        elif len(off_events) > 0:
+            all_events = off_events
+        else:
+            all_events = np.empty((0, 2))
+        
+        return all_events
+
     @abstractmethod
     def extract(self, frame: DVSFrame) -> Optional[np.ndarray]:
         """
@@ -392,21 +418,9 @@ class MeanPointExtractor(CenterPointExtractor):
     ON과 OFF 전체 이벤트들의 산술 평균(mean)을 계산하여 중심점을 추출합니다.
     """
     def extract(self, frame: DVSFrame) -> Optional[np.ndarray]:
-        on_events = frame.get_on_events()
-        off_events = frame.get_off_events()
-
-        # ON과 OFF 이벤트를 모두 결합
-        if len(on_events) > 0 and len(off_events) > 0:
-            # 둘 다 있는 경우: 결합
-            all_events = np.vstack([on_events, off_events])
-        elif len(on_events) > 0:
-            # ON 이벤트만 있는 경우
-            all_events = on_events
-        elif len(off_events) > 0:
-            # OFF 이벤트만 있는 경우
-            all_events = off_events
-        else:
-            # 이벤트가 없는 경우
+        all_events = self._extract_all_events(frame)
+        
+        if len(all_events) == 0:
             self.center_point = None
             return None
         
@@ -423,21 +437,9 @@ class MedianPointExtractor(CenterPointExtractor):
     아웃라이어에 덜 민감한 특징이 있습니다.
     """
     def extract(self, frame: DVSFrame) -> Optional[np.ndarray]:
-        on_events = frame.get_on_events()
-        off_events = frame.get_off_events()
-
-        # ON과 OFF 이벤트를 모두 결합
-        if len(on_events) > 0 and len(off_events) > 0:
-            # 둘 다 있는 경우: 결합
-            all_events = np.vstack([on_events, off_events])
-        elif len(on_events) > 0:
-            # ON 이벤트만 있는 경우
-            all_events = on_events
-        elif len(off_events) > 0:
-            # OFF 이벤트만 있는 경우
-            all_events = off_events
-        else:
-            # 이벤트가 없는 경우
+        all_events = self._extract_all_events(frame)
+        
+        if len(all_events) == 0:
             self.center_point = None
             return None
 
@@ -452,12 +454,24 @@ class KalmanPointExtractor(CenterPointExtractor):
     """
     칼만 필터를 사용하여 시간적으로 안정화된 중심점을 추정/추출합니다.
     Brownian motion 모델: process noise = sigma^2 (sigma_x=2.0, sigma_y=2.0)
+    
+    Gaussian 모션 데이터셋에 최적화: sigma_x=2.0, sigma_y=2.0 (분산=4.0)
     """
-    def __init__(self, process_noise: float = 4.0, measurement_noise: float = 10.0):
+    def __init__(self, 
+                 process_noise: float = 4.0, 
+                 measurement_noise: float = 10.0,
+                 sigma_x: float = 2.0,  # X축 표준편차 (데이터 생성 시 사용한 값)
+                 sigma_y: float = 2.0,  # Y축 표준편차 (데이터 생성 시 사용한 값)
+                 use_median: bool = False):  # 중앙값 사용 여부 (아웃라이어 강건성)
         super().__init__()
         # filterpy 라이브러리 필요: pip install filterpy
         from filterpy.kalman import KalmanFilter
         from filterpy.common import Q_discrete_white_noise
+
+        # 분산 정보 저장
+        self.sigma_x = sigma_x
+        self.sigma_y = sigma_y
+        self.use_median = use_median
 
         # State vector: [x, y] - position with Brownian motion
         self.kf = KalmanFilter(dim_x=2, dim_z=2)
@@ -477,31 +491,27 @@ class KalmanPointExtractor(CenterPointExtractor):
         self.kf.R = np.eye(2) * measurement_noise
         
         # Process noise covariance (Brownian motion: sigma^2 per dimension)
-        # Default: sigma = 2.0, so process_noise = sigma^2 = 4.0
-        # This models the random walk behavior of Brownian motion
-        self.kf.Q = np.eye(2) * process_noise
+        # 분산 정보를 명시적으로 사용 (각 축별로 다를 수 있음)
+        self.kf.Q = np.array([
+            [sigma_x**2, 0],
+            [0, sigma_y**2]
+        ])
         
         self.is_initialized = False
 
     def extract(self, frame: DVSFrame) -> Optional[np.ndarray]:
         # Extract all events (both ON and OFF)
-        on_events = frame.get_on_events()
-        off_events = frame.get_off_events()
-        
-        # Combine ON and OFF events
-        if len(on_events) > 0 and len(off_events) > 0:
-            all_events = np.vstack([on_events, off_events])
-        elif len(on_events) > 0:
-            all_events = on_events
-        elif len(off_events) > 0:
-            all_events = off_events
-        else:
-            all_events = np.empty((0, 2))
+        all_events = self._extract_all_events(frame)
         
         # Compute measurement (observed center) if enough events
         measured_center = None
         if len(all_events) > 5:  # Minimum event threshold
-             measured_center = np.mean(all_events, axis=0)
+            if self.use_median:
+                # 중앙값 사용 (아웃라이어에 더 강건)
+                measured_center = np.median(all_events, axis=0)
+            else:
+                # 평균 사용 (기본값)
+                measured_center = np.mean(all_events, axis=0)
 
         # Initialize Kalman filter with first valid measurement
         if not self.is_initialized and measured_center is not None:

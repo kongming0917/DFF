@@ -317,14 +317,14 @@ if __name__ == "__main__":
     
     print("\n" + "="*60)
     
-    # 템포럴 평균 추출기로 내보내기 (Temporal + Kalman)
-    print("🎯 Exporting with TemporalAveragePointExtractor + KalmanPointExtractor...")
-    export_center_comparison(
-        bin_file_path=BIN_FILE_PATH,
-        output_dir=OUTPUT_DIR + "_temporal",
-        max_frames=MAX_FRAMES,
-        use_temporal_average=True,
-        temporal_window=3,
-        include_kalman=True
-    )
+    # # 템포럴 평균 추출기로 내보내기 (Temporal + Kalman)
+    # print("🎯 Exporting with TemporalAveragePointExtractor + KalmanPointExtractor...")
+    # export_center_comparison(
+    #     bin_file_path=BIN_FILE_PATH,
+    #     output_dir=OUTPUT_DIR + "_temporal",
+    #     max_frames=MAX_FRAMES,
+    #     use_temporal_average=True,
+    #     temporal_window=3,
+    #     include_kalman=True
+    # )
 

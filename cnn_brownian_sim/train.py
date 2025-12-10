@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DVS 레이저 중심점 탐지 모델 훈련 스크립트 - Fixed GT 방식만 지원
+train.py: DVS 레이저 중심점 탐지 모델 훈련 스크립트
 """
 
 import torch
@@ -26,10 +26,12 @@ if dvs_root not in sys.path:
 
 # 공통 모듈 import
 from lib.bin_processor import BinProcessor
-from model import get_model, count_parameters
+from model import get_model, count_parameters, convert_to_quantized
 from dataset import create_train_val_loaders, DVSBrownianDataset
 from utils import EarlyStopping, ModelCheckpoint, MetricsTracker, visualize_predictions
+from config import get_training_mode_configs
 
+torch.backends.quantized.engine = 'fbgemm'
 
 class DVSBrownianTrainer:
     """DVS Brownian Motion 모델 훈련 클래스"""
@@ -46,7 +48,8 @@ class DVSBrownianTrainer:
         batch_size: int = 8,
         num_epochs: int = 100,
         patience: int = 15,
-        save_dir: str = 'checkpoints'
+        save_dir: str = 'checkpoints',
+        use_qat: bool = False,  # QAT 모드 (int8 양자화)
     ):
         self.model_name = model_name
         self.individual_frames = individual_frames
@@ -57,6 +60,10 @@ class DVSBrownianTrainer:
         self.batch_size = batch_size
         self.num_epochs = num_epochs
         self.save_dir = save_dir
+        self.use_qat = use_qat  # QAT 플래그 저장
+        # 결과 저장 디렉토리 설정 (PNG 파일용)
+        self.result_dir = 'result'
+        os.makedirs(self.result_dir, exist_ok=True)
         
         # 디바이스 설정
         if device == 'auto':
@@ -66,14 +73,21 @@ class DVSBrownianTrainer:
         
         print(f"🔧 Using device: {self.device}")
         
-        # 모델 초기화 (다중 채널)
-        self.model = get_model(model_name, input_channels=temporal_window, output_dim=2)
+        # 모델 초기화 (다중 채널, QAT 옵션 추가)
+        self.model = get_model(
+            model_name, 
+            input_channels=temporal_window, 
+            output_dim=2,
+            use_qat=use_qat,  # QAT 모드 전달
+        )
         self.model.to(self.device)
         
         # 모델 정보 출력
         params = count_parameters(self.model)
         print(f"📊 Model: {model_name}")
         print(f"   Parameters: {params['total']:,} (trainable: {params['trainable']:,})")
+        if use_qat:
+            print(f"   🔢 QAT Mode: Enabled (int8 quantization)")
         
         # 손실 함수 및 옵티마이저
         self.criterion = nn.MSELoss()
@@ -152,7 +166,15 @@ class DVSBrownianTrainer:
         
         # 에폭 통계 계산
         avg_loss = total_loss / total_samples
-        mae = np.mean(np.abs(np.array(predictions) - np.array(targets)))
+        
+        predictions_array = np.array(predictions)
+        targets_array = np.array(targets)
+        
+        roi_h, roi_w = self.roi_size
+        pred_pixels = predictions_array * np.array([roi_w, roi_h])
+        target_pixels = targets_array * np.array([roi_w, roi_h])
+        
+        mae = np.mean(np.abs(pred_pixels - target_pixels))
         
         return {
             'loss': avg_loss,
@@ -183,7 +205,6 @@ class DVSBrownianTrainer:
         
         # 검증 통계 계산
         avg_loss = total_loss / total_samples
-        mae = np.mean(np.abs(np.array(predictions) - np.array(targets)))
         
         # 정확도 계산 (0-1 정규화된 좌표에서)
         predictions_array = np.array(predictions)
@@ -193,6 +214,9 @@ class DVSBrownianTrainer:
         roi_h, roi_w = self.roi_size
         pred_pixels = predictions_array * np.array([roi_w, roi_h])
         target_pixels = targets_array * np.array([roi_w, roi_h])
+
+        # pixel 단위로 계산
+        mae = np.mean(np.abs(pred_pixels - target_pixels))
         
         pixel_errors = np.sqrt(np.sum((pred_pixels - target_pixels)**2, axis=1))
         accuracy_5px = np.mean(pixel_errors <= 5.0) * 100
@@ -211,54 +235,141 @@ class DVSBrownianTrainer:
     
     def train(self, **dataset_kwargs):
         """전체 훈련 루프"""
-        print(f"\n🚀 Starting Fixed GT training for {self.num_epochs} epochs")
+        print(f"\n🚀 Start Traininging Pipeline for {self.num_epochs} epochs (QAT: {self.use_qat})")
         print("=" * 70)
         
+        # ------------------------------------------------------------
+        # [Phase 0] Data Setup
+        # ------------------------------------------------------------
         # 데이터 설정
         self.setup_data(**dataset_kwargs)
         
-        # 훈련 루프
-        for epoch in range(self.num_epochs):
-            start_time = time.time()
+        # Best model path
+        if self.use_qat:
+            standard_checkpoint_dir = self.save_dir.replace('_qat', '')
+            best_fp32_path = os.path.join(standard_checkpoint_dir, f"{self.model_name}_best.pth")
+        else:
+            best_fp32_path = os.path.join(self.save_dir, f"{self.model_name}_best.pth")
+        
+        skip_phase1 = False
+        
+        if self.use_qat and os.path.exists(best_fp32_path):
+            print(f"   ℹ️ QAT mode: Best model already exists at {best_fp32_path}")
+            print(f"   Skipping Phase 1 training...")
             
-            print(f"\n📈 Epoch {epoch+1}/{self.num_epochs}")
-            print("-" * 50)
+            # load best fp32 model
+            print(f"   Loading best model from {best_fp32_path}...")
+            checkpoint = torch.load(best_fp32_path, map_location=self.device, weights_only=False)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            print("   ✅ Best model loaded")
+            skip_phase1 = True
+        
+        # ------------------------------------------------------------
+        # [Phase 1] Standard Training (FP32)
+        # ------------------------------------------------------------
+        if not skip_phase1:
+            print("\n" + "=" * 70)
+            print("[Phase 1] Starting Phase 1 training")
+            print("=" * 70)
             
-            # 훈련
-            train_metrics = self.train_epoch()
+            # 훈련 루프
+            for epoch in range(self.num_epochs):
+                start_time = time.time()
+                
+                print(f"\n📈 Epoch {epoch+1}/{self.num_epochs}")
+                print("-" * 50)
+                
+                # 훈련
+                train_metrics = self.train_epoch()
+                # 검증
+                val_metrics = self.validate_epoch()
+                # 학습률 스케줄러 업데이트
+                self.scheduler.step(val_metrics['loss'])
+                # 메트릭 기록
+                self.metrics.update(epoch, train_metrics, val_metrics)
+                # 경과 시간 계산
+                epoch_time = time.time() - start_time
+                
+                # 결과 출력
+                print(f"   Train Loss: {train_metrics['loss']:.6f}, MAE: {train_metrics['mae']:.3f}")
+                print(f"   Val Loss: {val_metrics['loss']:.6f}, MAE: {val_metrics['mae']:.3f}")
+                print(f"   Val Acc@5px: {val_metrics['accuracy_5px']:.1f}%, Acc@10px: {val_metrics['accuracy_10px']:.1f}%")
+                print(f"   Pixel Error: {val_metrics['pixel_error_mean']:.2f}±{val_metrics['pixel_error_std']:.2f}")
+                print(f"   Time: {epoch_time:.1f}s, LR: {self.optimizer.param_groups[0]['lr']:.2e}")
+                
+                # 체크포인트 저장
+                is_best = self.checkpoint.save(
+                    self.model, self.optimizer, epoch, val_metrics['loss'], 
+                    filename=f"{self.model_name}_epoch_{epoch+1}.pth"
+                )
+                
+                if is_best:
+                    print("   ⭐ New best model saved!")
+                
+                # Early stopping 체크
+                if self.early_stopping(val_metrics['loss']):
+                    print(f"\n⏹️ Early stopping at epoch {epoch+1}")
+                    break
+        
+        # ------------------------------------------------------------
+        # [Phase 2] QAT Fine-tuning (conditional)
+        # ------------------------------------------------------------
+        if self.use_qat:
+            print("\n" + "=" * 70)
+            print("[Phase 2] Starting QAT Fine-tuning")
+            print("=" * 70)
             
-            # 검증
-            val_metrics = self.validate_epoch()
+            # 1. Best FP32 model load
+            # We already loaded the best FP32 model in Phase 0
             
-            # 학습률 스케줄러 업데이트
-            self.scheduler.step(val_metrics['loss'])
+            print("🚫 Disabling Dropout for QAT phase...")
+            for name, module in self.model.named_modules():
+                if isinstance(module, nn.Dropout):
+                    module.p = 0.0
+                    print(f"   Layer '{name}': Dropout probability set to 0.0")
+    
             
-            # 메트릭 기록
-            self.metrics.update(epoch, train_metrics, val_metrics)
+            # 2. MobileOne 구조 변환 (Multi -> Single)
+            if hasattr(self.model, 'reparameterize'):
+                print("🔄 Reparameterizing MobileOne model...")
+                self.model.reparameterize()
+                self.model.to(self.device)
+                print("✅ Reparameterization complete")
+                
+            # 3. Prepare QAT model
+            from model import prepare_qat_model
+            self.model = prepare_qat_model(self.model)             
+            self.model.to(self.device)
             
-            # 경과 시간 계산
-            epoch_time = time.time() - start_time
+            # 4. Optimizer 및 Scheduler 재설정
+            qat_lr = self.lr * 0.1
+            self.optimizer =optim.Adam(self.model.parameters(), lr=qat_lr)
+            self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=3, gamma=0.5)
             
-            # 결과 출력
-            print(f"   Train Loss: {train_metrics['loss']:.6f}, MAE: {train_metrics['mae']:.3f}")
-            print(f"   Val Loss: {val_metrics['loss']:.6f}, MAE: {val_metrics['mae']:.3f}")
-            print(f"   Val Acc@5px: {val_metrics['accuracy_5px']:.1f}%, Acc@10px: {val_metrics['accuracy_10px']:.1f}%")
-            print(f"   Pixel Error: {val_metrics['pixel_error_mean']:.2f}±{val_metrics['pixel_error_std']:.2f}")
-            print(f"   Time: {epoch_time:.1f}s, LR: {self.optimizer.param_groups[0]['lr']:.2e}")
+            self.checkpoint.best_metric = float('inf')
             
-            # 체크포인트 저장
-            is_best = self.checkpoint.save(
-                self.model, self.optimizer, epoch, val_metrics['loss'], 
-                filename=f"{self.model_name}_epoch_{epoch+1}.pth"
-            )
-            
-            if is_best:
-                print("   ⭐ New best model saved!")
-            
-            # Early stopping 체크
-            if self.early_stopping(val_metrics['loss']):
-                print(f"\n⏹️ Early stopping at epoch {epoch+1}")
-                break
+            # 5. QAT Fine-tuning loop
+            qat_epochs =30
+            print(f" Fine-tuning QAT model for {qat_epochs} epochs ...")
+        
+            for epoch in range(qat_epochs):
+                print(f"\n QAT Epoch {epoch+1}/{qat_epochs}")
+                t_metrics = self.train_epoch()
+                v_metrics = self.validate_epoch()              
+                self.metrics.update(epoch, t_metrics, v_metrics)
+                
+                print(f"   QAT Train Loss: {t_metrics['loss']:.6f}, MAE: {t_metrics['mae']:.3f}")
+                print(f"   QAT Val Loss: {v_metrics['loss']:.6f}, MAE: {v_metrics['mae']:.3f}")
+                
+                is_best = self.checkpoint.save(
+                    self.model, self.optimizer, epoch, v_metrics['loss'], 
+                    filename=f"{self.model_name}_qat_epoch_{epoch+1}.pth"
+                )
+                
+                if is_best:
+                    print("   ⭐ New best QAT model saved!")                
+                print("-" * 50)
+        
         
         # 훈련 완료
         print(f"\n✅ Training completed!")
@@ -278,13 +389,54 @@ class DVSBrownianTrainer:
         self.plot_training_curves()
         
         # 최고 모델 로드하여 최종 검증
-        best_model_path = os.path.join(self.save_dir, f"{self.model_name}_best.pth")
+        # QAT 모드일 때는 qat_best.pth를 찾고, 없으면 일반 best.pth 사용
+        if self.use_qat:
+            target_model_name = f"{self.model_name}_qat_best.pth"
+            best_model_path = os.path.join(self.save_dir, target_model_name)
+        else:
+            target_model_name = f"{self.model_name}_best.pth"
+            best_model_path = os.path.join(self.save_dir, target_model_name)
+            
         if os.path.exists(best_model_path):
+            # 1. Load best model
             print(f"\n🔄 Loading best model for final evaluation...")
             checkpoint = torch.load(best_model_path, map_location=self.device, weights_only=False)
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-
-
+            
+            # QAT 모드인 경우: 현재 모델이 이미 QAT 모델이므로 체크포인트에서 로드하지 않고 그대로 사용
+            if self.use_qat:
+                print("   ℹ️ QAT mode: Using current QAT model (checkpoint loading skipped)")
+            else:
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+                if hasattr(self.model, 'reparameterize'):
+                    print("🔄 Reparameterizing MobileOne model...")
+                    self.model.reparameterize()
+                    print("✅ Reparameterization complete")
+            
+            # QAT 모드인 경우 양자화된 모델로 변환하여 저장
+            if self.use_qat:
+                self.model.eval()
+                self.model.to('cpu')
+                quantized_model = convert_to_quantized(self.model)
+                
+                # 양자화된 모델 저장 (QAT 모델)
+                quantized_path = os.path.join(self.save_dir, f"{self.model_name}_int8.pth")
+                torch.save({
+                    'model_state_dict': quantized_model.state_dict(),
+                    'epoch': checkpoint.get('epoch', 0),
+                    'val_loss': checkpoint.get('val_loss', float('inf')),
+                    'quantized': True,
+                    'model_name': self.model_name,
+                    'input_channels': self.temporal_window,
+                    'output_dim': 2
+                }, quantized_path)
+                print(f"✅ Quantized model (int8) saved to {quantized_path}")
+                
+                # 최종 검증은 QAT 모델로 수행 (양자화된 모델은 저장만)
+                # 양자화된 모델은 일반 텐서로 실행할 수 없으므로 QAT 모델 사용
+                self.model = quantized_model
+                self.device = torch.device('cpu')
+            
+            self.model.to(self.device)
 
             # 최종 검증 (랜덤 shift + 시드 고정으로 재현성 확보)
             print(f"🔄 Running final validation with random shifts (seed fixed)...")
@@ -371,8 +523,11 @@ class DVSBrownianTrainer:
         plt.suptitle(f'{self.model_name} Fixed GT Training Curves')
         plt.tight_layout()
         
-        # 저장
-        plot_path = os.path.join(self.save_dir, f'{self.model_name}_training_curves.png')
+        # 저장 (result 디렉토리에 저장)
+        if self.use_qat:
+            plot_path = os.path.join(self.result_dir, f'{self.model_name}_qat_training_curves.png')
+        else:
+            plot_path = os.path.join(self.result_dir, f'{self.model_name}_training_curves.png')
         plt.savefig(plot_path, dpi=300, bbox_inches='tight')
         print(f"📈 Training curves saved to {plot_path}")
         plt.show()  # MobaXterm에서 GUI 창으로 표시
@@ -395,7 +550,10 @@ class DVSBrownianTrainer:
             sample_preds = predictions[indices]
             sample_targets = targets[indices]
             
-            save_path = os.path.join(self.save_dir, f'{self.model_name}_predictions.png')
+            if self.use_qat:
+                save_path = os.path.join(self.result_dir, f'{self.model_name}_qat_predictions.png')
+            else:
+                save_path = os.path.join(self.result_dir, f'{self.model_name}_predictions.png')
             print(f"   💾 Saving to: {save_path}")
             
             visualize_predictions(sample_preds, sample_targets, 
@@ -435,13 +593,8 @@ def load_individual_frames_from_bin(bin_file_path: str, max_frames: Optional[int
         # 프레임 데이터를 numpy 배열로 변환
         individual_frames = []
         for frame_idx, frame in enumerate(frames_data):
-            # frame.raw_data를 float32로 변환하고 정규화
-            frame_array = frame.raw_data.astype(np.float32)
-            
-            # 정규화 (0-1 범위)
-            if np.max(frame_array) > 0:
-                frame_array = frame_array / np.max(frame_array)
-            
+            # frame.raw_data를 float32로 변환하고 고정 스케일링 (2bit 데이터: 0,1,2 → 0.0,0.5,1.0)
+            frame_array = frame.raw_data.astype(np.float32) / 2.0  # 고정 스케일링
             individual_frames.append(frame_array)
             
             if len(individual_frames) >= max_frames_limit:
@@ -494,9 +647,18 @@ def train_brownian_model(
     config: Dict[str, Any],
     bin_file_path: str,
     csv_labels_path: str,
-    lr: Optional[float] = None
+    lr: Optional[float] = None,
+    use_qat: bool = False  # QAT 옵션 추가
 ):
-    """Brownian Motion 방식으로 모델 훈련 (CSV 레이블 사용)"""
+    """Brownian Motion 방식으로 모델 훈련 (CSV 레이블 사용)
+    
+    Args:
+        config: 훈련 설정 딕셔너리
+        bin_file_path: bin 파일 경로
+        csv_labels_path: CSV 레이블 파일 경로
+        lr: 학습률 (옵션)
+        use_qat: QAT 모드 사용 여부 (int8 양자화)
+    """
     
     # 기본값 설정
     default_lr = 0.001
@@ -507,6 +669,10 @@ def train_brownian_model(
         'lr': lr if lr is not None else config.get('lr', default_lr),
         'save_dir': f"checkpoints_{config['model_name']}"
     }
+    
+    # QAT 모드인 경우 체크포인트 디렉토리 이름에 표시
+    if use_qat:
+        full_config['save_dir'] = f"checkpoints_{config['model_name']}_qat"
     
     # 개별 프레임 로드
     individual_frames = load_individual_frames_from_bin(
@@ -525,10 +691,11 @@ def train_brownian_model(
             'bin_file_path': bin_file_path,
             'csv_labels_path': csv_labels_path,
             'training_config': full_config,
+            'use_qat': use_qat,  # QAT 설정 저장
             'timestamp': datetime.now().isoformat()
         }, f, indent=2)
     
-    # 트레이너 생성 및 훈련
+    # 트레이너 생성 및 훈련 (QAT 옵션 전달)
     trainer = DVSBrownianTrainer(
         model_name=config['model_name'],
         individual_frames=individual_frames,
@@ -539,7 +706,8 @@ def train_brownian_model(
         num_epochs=full_config['num_epochs'],
         patience=full_config['patience'],
         save_dir=full_config['save_dir'],
-        temporal_window=full_config['temporal_window']
+        temporal_window=full_config['temporal_window'],
+        use_qat=use_qat,  # QAT 옵션 추가
     )
     
     # 데이터셋 파라미터 (필요 없음, CSV에서 로드)
@@ -561,6 +729,7 @@ if __name__ == "__main__":
     
     # 학습 하이퍼파라미터 설정
     LEARNING_RATE = 0.001  # 학습률
+    # QAT 여부는 config.py의 설정에서 자동으로 결정됨
     
     # 파일 존재 확인
     if not os.path.exists(BIN_FILE_PATH):
@@ -577,25 +746,49 @@ if __name__ == "__main__":
     else:
         print(f"✅ CSV 레이블 파일 확인: {CSV_LABELS_PATH}")
     
-    # 학습 설정 (MobileNetV2 사용)
-    config = {
-        'model_name': 'mobilenet_v2',  # MobileNetV2 (light 아님)
-        'max_frames': 500,
-        'temporal_window': 5,
-        'num_epochs': 50,
-        'batch_size': 4,
-        'patience': 15,
-        'roi_size': (512, 512),
-        'description': 'Brownian Motion 학습 (MobileNetV2, 500 frames, temporal=5, epochs=50)'
-    }
+    # 사용 가능한 학습 설정 목록 가져오기
+    available_configs = get_training_mode_configs()
     
-    print(f"\n🚀 Brownian Motion 데이터셋으로 학습을 시작합니다...")
+    # 설정 목록 표시 (모델 이름만)
+    print(f"\n📋 사용 가능한 학습 설정:")
+    print("=" * 60)
+    config_list = list(available_configs.items())
+    for idx, (config_name, config_data) in enumerate(config_list, 1):
+        print(f"  {idx}. {config_name}")
+    
+    # 사용자 선택
+    while True:
+        try:
+            choice = input(f"\n학습 설정을 선택하세요 (1-{len(config_list)}): ").strip()
+            choice_idx = int(choice) - 1
+            
+            if 0 <= choice_idx < len(config_list):
+                selected_config_name, selected_config = config_list[choice_idx]
+                break
+            else:
+                print(f"❌ 잘못된 선택입니다. 1-{len(config_list)} 사이의 숫자를 입력하세요.")
+        except ValueError:
+            print("❌ 숫자를 입력하세요.")
+        except KeyboardInterrupt:
+            print("\n⏹️ 사용자가 취소했습니다.")
+            exit(0)
+    
+    # 선택된 설정 사용
+    config = selected_config.copy()
+    # QAT 여부는 config에서 가져옴 (config.py의 설정 사용)
+    use_qat = config.get('use_qat', False)
+    
+    print(f"\n✅ 선택된 설정: {selected_config_name}")
     print(f"   모델: {config['model_name']}")
-    print(f"   최대 프레임: {config['max_frames'] or 'All'}")
+    print(f"   최대 프레임: {config.get('max_frames', 'All') or 'All'}")
     print(f"   시간 윈도우: {config['temporal_window']}")
     print(f"   에폭 수: {config['num_epochs']}")
     print(f"   배치 크기: {config['batch_size']}")
     print(f"   ROI 크기: {config['roi_size'][0]}×{config['roi_size'][1]}")
+    if use_qat:
+        print(f"   🔢 QAT 모드: 활성화 (int8 양자화)")
+    
+    print(f"\n🚀 Brownian Motion 데이터셋으로 학습을 시작합니다...")
     
     try:
         # Brownian Motion 모델 학습 실행
@@ -603,14 +796,22 @@ if __name__ == "__main__":
             config=config,
             bin_file_path=BIN_FILE_PATH,
             csv_labels_path=CSV_LABELS_PATH,
-            lr=LEARNING_RATE
+            lr=LEARNING_RATE,
+            use_qat=use_qat  # config.py의 설정 사용
         )
         
         print(f"\n✅ {config['model_name']} 모델 학습 완료!")
-        print(f"📁 체크포인트 저장 위치: checkpoints_{config['model_name']}/")
-        print(f"🎯 최고 모델: checkpoints_{config['model_name']}/{config['model_name']}_best.pth")
-        print(f"📊 훈련 곡선: checkpoints_{config['model_name']}/{config['model_name']}_training_curves.png")
-        print(f"🔍 예측 결과: checkpoints_{config['model_name']}/{config['model_name']}_predictions.png")
+        if use_qat:
+            print(f"📁 체크포인트 저장 위치: checkpoints_{config['model_name']}_qat/")
+            print(f"🎯 최고 모델: checkpoints_{config['model_name']}_qat/{config['model_name']}_qat_best.pth")
+            print(f"🔢 양자화된 모델 (int8): checkpoints_{config['model_name']}_qat/{config['model_name']}_qat.pth")
+            print(f"📊 훈련 곡선: result/{config['model_name']}_qat_training_curves.png")
+            print(f"🔍 예측 결과: result/{config['model_name']}_qat_predictions.png")
+        else:
+            print(f"📁 체크포인트 저장 위치: checkpoints_{config['model_name']}/")
+            print(f"🎯 최고 모델: checkpoints_{config['model_name']}/{config['model_name']}_best.pth")
+            print(f"📊 훈련 곡선: result/{config['model_name']}_training_curves.png")
+            print(f"🔍 예측 결과: result/{config['model_name']}_predictions.png")
         
     except KeyboardInterrupt:
         print(f"\n⏹️ 사용자가 학습을 중단했습니다.")

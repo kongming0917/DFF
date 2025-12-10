@@ -308,39 +308,66 @@ def load_yolo_predictions(
 
 def load_filter_predictions(
     csv_file_path: str,
-    ground_truth_csv: str
+    ground_truth_csv: str,
+    temporal_window: int = 5,
+    max_frames: int = 100
 ) -> Dict:
-    """Filter 결과를 CSV에서 로드하고 정답과 비교"""
+    """Filter 결과를 CSV에서 로드하고 정답과 비교
+    Filter CSV의 각 행이 bin 파일을 읽는 순서대로 생성되었으므로,
+    Filter CSV의 i번째 행 = 프레임 인덱스 i (0부터 시작)
+    Filter CSV의 frame_number를 프레임 인덱스로 변환하여 GT CSV와 매칭
+    """
     print("🔍 Loading Filter predictions...")
     
     if not os.path.exists(csv_file_path):
         raise FileNotFoundError(f"Filter CSV file not found: {csv_file_path}")
     
-    # Filter 예측 CSV 로드
+    # Filter 예측 CSV 로드 (원래 순서 유지)
     pred_df = pd.read_csv(csv_file_path)
     pred_df = pred_df.dropna()  # 유효한 데이터만
     
     # 정답 CSV 로드
     gt_df = load_ground_truth(ground_truth_csv)
+    gt_df.set_index('frame_idx', inplace=True)  # frame_idx를 인덱스로 설정
     
-    # 데이터 병합 (frame_number와 frame_idx 기준)
-    merged = pd.merge(
-        pred_df,
-        gt_df,
-        left_on='frame_number',
-        right_on='frame_idx',
-        how='inner'
-    )
+    # Filter CSV의 각 행이 bin 파일을 읽는 순서대로 생성되었으므로
+    # Filter CSV의 i번째 행 = 프레임 인덱스 i (0부터 시작)
+    # frame_number는 무시하고 순서만 사용
     
-    # 유효한 데이터만
-    valid = merged.dropna(subset=['center_x', 'center_y', 'roi_center_x', 'roi_center_y'])
+    # CNN/YOLO와 동일한 temporal window 샘플 생성
+    # CNN 샘플 i: frame 인덱스 [i, i+1, i+2, i+3, i+4] 사용, center_frame 인덱스 = i+2
+    num_samples = max_frames - temporal_window + 1
+    predictions = []
+    targets = []
     
-    if len(valid) == 0:
-        raise ValueError("No valid merged data found. Check frame_number/frame_idx matching.")
+    for sample_idx in range(num_samples):
+        center_frame_idx = sample_idx + temporal_window // 2  # center_frame 인덱스 = sample_idx + 2
+        
+        # Filter CSV에서 center_frame_idx번째 행 찾기 (순서대로)
+        # Filter CSV의 i번째 행 = 프레임 인덱스 i
+        if center_frame_idx < len(pred_df):
+            row = pred_df.iloc[center_frame_idx]
+            
+            # predictions 추출
+            pred = np.array([row['center_x'], row['center_y']])
+            
+            # GT에서 프레임 인덱스로 target 찾기
+            if center_frame_idx in gt_df.index:
+                gt_row = gt_df.loc[center_frame_idx]
+                # Filter는 roi_center_x/y를 target으로 사용 (evaluate_against_ground_truth.py와 동일)
+                target = np.array([gt_row['roi_center_x'], gt_row['roi_center_y']])
+            else:
+                # GT에 없으면 스킵
+                continue
+            
+            predictions.append(pred)
+            targets.append(target)
+        else:
+            # Filter CSV에 해당 인덱스가 없으면 스킵
+            continue
     
-    # predictions와 targets 추출
-    predictions = valid[['center_x', 'center_y']].values
-    targets = valid[['roi_center_x', 'roi_center_y']].values
+    predictions = np.array(predictions)
+    targets = np.array(targets)
     
     # 오차 계산
     errors = np.sqrt(np.sum((predictions - targets)**2, axis=1))
@@ -461,7 +488,7 @@ def compare_methods(
     # ========== 4. 2D 궤적 비교 (X-Y 평면) ==========
     ax4 = fig.add_subplot(gs[1, 0])
     # Brownian motion은 시간에 따라 움직이므로 궤적을 선으로 표시
-    ax4.plot(cnn_target[:, 0], cnn_target[:, 1], 'b-', alpha=0.6, linewidth=2, label='GT Trajectory', marker='o', markersize=3)
+    ax4.plot(cnn_target[:, 0], cnn_target[:, 1], 'k-', alpha=0.6, linewidth=2, label='GT Trajectory', marker='o', markersize=3)
     ax4.plot(cnn_pred[:, 0], cnn_pred[:, 1], 'b--', alpha=0.6, linewidth=1, label='CNN Pred', marker='x', markersize=2)
     ax4.plot(yolo_pred[:, 0], yolo_pred[:, 1], 'g--', alpha=0.6, linewidth=1, label='YOLO Pred', marker='x', markersize=2)
     ax4.plot(filter_pred[:, 0], filter_pred[:, 1], 'r--', alpha=0.6, linewidth=1, label='Filter Pred', marker='x', markersize=2)
@@ -782,7 +809,9 @@ def main():
     # Filter 결과 로드
     filter_results = load_filter_predictions(
         csv_file_path=filter_csv,
-        ground_truth_csv=ground_truth_csv
+        ground_truth_csv=ground_truth_csv,
+        temporal_window=5,
+        max_frames=100
     )
     
     # 샘플 수 맞추기

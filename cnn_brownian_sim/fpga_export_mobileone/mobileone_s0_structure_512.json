@@ -1,0 +1,894 @@
+[
+  {
+    "id": 1,
+    "name": "model.backbone.stage0.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [48, 5, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.09572003036737442,
+      "output_zero_point": 63
+    },
+    "kernel_size": [3, 3],
+    "stride": [2, 2],
+    "padding": [1, 1],
+    "groups": 1,
+    "in_channels": 5,
+    "out_channels": 48
+  },
+  {
+    "id": 2,
+    "name": "model.backbone.stage1.0.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [48, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.31933438777923584,
+      "output_zero_point": 61
+    },
+    "kernel_size": [3, 3],
+    "stride": [2, 2],
+    "padding": [1, 1],
+    "groups": 48,
+    "in_channels": 48,
+    "out_channels": 48
+  },
+  {
+    "id": 3,
+    "name": "model.backbone.stage1.1.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [48, 48, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.23419545590877533,
+      "output_zero_point": 54
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 48,
+    "out_channels": 48
+  },
+  {
+    "id": 4,
+    "name": "model.backbone.stage1.2.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [48, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.43369343876838684,
+      "output_zero_point": 50
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 48,
+    "in_channels": 48,
+    "out_channels": 48
+  },
+  {
+    "id": 5,
+    "name": "model.backbone.stage1.3.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [48, 48, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.27490708231925964,
+      "output_zero_point": 59
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 48,
+    "out_channels": 48
+  },
+  {
+    "id": 6,
+    "name": "model.backbone.stage2.0.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [48, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.36233076453208923,
+      "output_zero_point": 62
+    },
+    "kernel_size": [3, 3],
+    "stride": [2, 2],
+    "padding": [1, 1],
+    "groups": 48,
+    "in_channels": 48,
+    "out_channels": 48
+  },
+  {
+    "id": 7,
+    "name": "model.backbone.stage2.1.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 48, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.2524075210094452,
+      "output_zero_point": 66
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 48,
+    "out_channels": 128
+  },
+  {
+    "id": 8,
+    "name": "model.backbone.stage2.2.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.380532443523407,
+      "output_zero_point": 50
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 128,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 9,
+    "name": "model.backbone.stage2.3.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 128, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.2708316445350647,
+      "output_zero_point": 54
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 10,
+    "name": "model.backbone.stage2.4.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.416278213262558,
+      "output_zero_point": 46
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 128,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 11,
+    "name": "model.backbone.stage2.5.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 128, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.27356550097465515,
+      "output_zero_point": 56
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 12,
+    "name": "model.backbone.stage2.6.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.3851626515388489,
+      "output_zero_point": 49
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 128,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 13,
+    "name": "model.backbone.stage2.7.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 128, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.25296685099601746,
+      "output_zero_point": 57
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 14,
+    "name": "model.backbone.stage2.8.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.39770784974098206,
+      "output_zero_point": 49
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 128,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 15,
+    "name": "model.backbone.stage2.9.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 128, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.25446563959121704,
+      "output_zero_point": 53
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 16,
+    "name": "model.backbone.stage2.10.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.3808802664279938,
+      "output_zero_point": 47
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 128,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 17,
+    "name": "model.backbone.stage2.11.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 128, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.23612315952777863,
+      "output_zero_point": 57
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 18,
+    "name": "model.backbone.stage2.12.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.3564760088920593,
+      "output_zero_point": 54
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 128,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 19,
+    "name": "model.backbone.stage2.13.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 128, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.23187583684921265,
+      "output_zero_point": 55
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 20,
+    "name": "model.backbone.stage2.14.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.35553252696990967,
+      "output_zero_point": 49
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 128,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 21,
+    "name": "model.backbone.stage2.15.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 128, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.23141387104988098,
+      "output_zero_point": 56
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 22,
+    "name": "model.backbone.stage3.0.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [128, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.3114332854747772,
+      "output_zero_point": 66
+    },
+    "kernel_size": [3, 3],
+    "stride": [2, 2],
+    "padding": [1, 1],
+    "groups": 128,
+    "in_channels": 128,
+    "out_channels": 128
+  },
+  {
+    "id": 23,
+    "name": "model.backbone.stage3.1.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 128, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.17026425898075104,
+      "output_zero_point": 62
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 128,
+    "out_channels": 256
+  },
+  {
+    "id": 24,
+    "name": "model.backbone.stage3.2.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.28777316212654114,
+      "output_zero_point": 49
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 256,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 25,
+    "name": "model.backbone.stage3.3.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 256, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.19360612332820892,
+      "output_zero_point": 55
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 26,
+    "name": "model.backbone.stage3.4.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.2719185948371887,
+      "output_zero_point": 50
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 256,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 27,
+    "name": "model.backbone.stage3.5.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 256, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.17777138948440552,
+      "output_zero_point": 53
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 28,
+    "name": "model.backbone.stage3.6.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.279434472322464,
+      "output_zero_point": 50
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 256,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 29,
+    "name": "model.backbone.stage3.7.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 256, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.1685665100812912,
+      "output_zero_point": 53
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 30,
+    "name": "model.backbone.stage3.8.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.3187533915042877,
+      "output_zero_point": 47
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 256,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 31,
+    "name": "model.backbone.stage3.9.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 256, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.21374236047267914,
+      "output_zero_point": 45
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 32,
+    "name": "model.backbone.stage3.10.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.3605862855911255,
+      "output_zero_point": 50
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 256,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 33,
+    "name": "model.backbone.stage3.11.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 256, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.231088325381279,
+      "output_zero_point": 44
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 34,
+    "name": "model.backbone.stage3.12.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.46018117666244507,
+      "output_zero_point": 60
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 256,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 35,
+    "name": "model.backbone.stage3.13.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 256, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.27719563245773315,
+      "output_zero_point": 42
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 36,
+    "name": "model.backbone.stage3.14.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.5244895219802856,
+      "output_zero_point": 38
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 256,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 37,
+    "name": "model.backbone.stage3.15.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 256, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.29211512207984924,
+      "output_zero_point": 41
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 38,
+    "name": "model.backbone.stage3.16.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.47225549817085266,
+      "output_zero_point": 45
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 256,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 39,
+    "name": "model.backbone.stage3.17.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 256, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.348622590303421,
+      "output_zero_point": 32
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 40,
+    "name": "model.backbone.stage3.18.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.5551343560218811,
+      "output_zero_point": 42
+    },
+    "kernel_size": [3, 3],
+    "stride": [1, 1],
+    "padding": [1, 1],
+    "groups": 256,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 41,
+    "name": "model.backbone.stage3.19.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 256, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.3325408101081848,
+      "output_zero_point": 42
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 42,
+    "name": "model.backbone.stage4.0.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [256, 1, 3, 3],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.4536363482475281,
+      "output_zero_point": 44
+    },
+    "kernel_size": [3, 3],
+    "stride": [2, 2],
+    "padding": [1, 1],
+    "groups": 256,
+    "in_channels": 256,
+    "out_channels": 256
+  },
+  {
+    "id": 43,
+    "name": "model.backbone.stage4.1.reparam_conv",
+    "type": "Conv2d",
+    "weight": {
+      "shape": [1024, 256, 1, 1],
+      "dtype": "int8",
+      "is_per_channel": true
+    },
+    "quantization": {
+      "output_scale": 0.433807909488678,
+      "output_zero_point": 55
+    },
+    "kernel_size": [1, 1],
+    "stride": [1, 1],
+    "padding": [0, 0],
+    "groups": 1,
+    "in_channels": 256,
+    "out_channels": 1024
+  },
+  {
+    "id": 44,
+    "name": "model.backbone.linear.1",
+    "type": "Linear",
+    "weight": {
+      "shape": [128, 1024],
+      "dtype": "int8",
+      "is_per_channel": false
+    },
+    "quantization": {
+      "output_scale": 0.0790305808186531,
+      "output_zero_point": 88
+    },
+    "in_features": 1024,
+    "out_features": 128
+  },
+  {
+    "id": 45,
+    "name": "model.backbone.linear.4",
+    "type": "Linear",
+    "weight": {
+      "shape": [2, 128],
+      "dtype": "int8",
+      "is_per_channel": false
+    },
+    "quantization": {
+      "output_scale": 0.002399004762992263,
+      "output_zero_point": 64
+    },
+    "in_features": 128,
+    "out_features": 2
+  }
+]

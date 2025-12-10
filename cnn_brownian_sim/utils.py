@@ -88,8 +88,8 @@ class ModelCheckpoint:
             checkpoint['best_metric'] = metric
             
             # 모델명 추출 (파일명에서)
-            if filename and '_' in filename:
-                model_name = filename.split('_')[0]
+            if filename and '_epoch_' in filename:
+                model_name = filename.split('_epoch_')[0]
                 best_filename = f'{model_name}_best.pth'
             else:
                 best_filename = 'best_model.pth'

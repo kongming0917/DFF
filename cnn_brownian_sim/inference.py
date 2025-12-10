@@ -7,6 +7,7 @@ import torch
 import numpy as np
 import os
 import sys
+import time
 from typing import List, Tuple, Dict, Any
 
 # 상위 디렉토리를 sys.path에 추가 (lib 모듈 사용을 위해)
@@ -15,7 +16,7 @@ if dvs_root not in sys.path:
     sys.path.insert(0, dvs_root)
 
 # 상위 디렉토리 모듈 import
-from model import get_model
+from model import get_model, convert_to_quantized, prepare_qat_model
 from lib.bin_processor import BinProcessor
 from utils import visualize_predictions
 from dataset import DVSBrownianDataset  # Brownian motion 전용
@@ -23,74 +24,84 @@ from dataset import DVSBrownianDataset  # Brownian motion 전용
 class DVSInference:
     """간소화된 DVS 추론 클래스"""
     
-    def __init__(self, checkpoint_path: str, device: str = 'auto'):
-        """추론 시스템 초기화"""
+    def __init__(self, checkpoint_path: str, device: str = 'auto', use_quantized: bool = False):
+        """추론 시스템 초기화
+        
+        Args:
+            checkpoint_path: 체크포인트 파일 경로
+            device: 사용할 디바이스 ('auto', 'cuda', 'cpu')
+            use_quantized: 양자화된 모델 사용 여부 (자동 감지도 가능)
+        """
         self.checkpoint_path = checkpoint_path
+        if not os.path.exists(self.checkpoint_path):
+            raise FileNotFoundError(f"❌ Checkpoint not found: {self.checkpoint_path}")
         
-        if device == 'auto':
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.use_quantized = use_quantized
+        
+        if self.use_quantized:
+            self.device = torch.device('cpu')
+            print("🔧 Using CPU for quantized inference")
         else:
-            self.device = torch.device(device)
-        
-        print(f"🔧 Using device: {self.device}")
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            print(f"🔧 Using device: {self.device}")
         
         # 모델 로드
         self.model, self.input_channels = self._load_model()
         
     def _load_model(self):
-        """모델 로드"""
-        if not os.path.exists(self.checkpoint_path):
-            raise FileNotFoundError(f"❌ Checkpoint not found: {self.checkpoint_path}")
-        
+        """모델 로드"""      
         # 체크포인트 로드
         checkpoint = torch.load(self.checkpoint_path, map_location=self.device, weights_only=False)
         
-        # 첫 번째 conv 레이어에서 입력 채널 수 추출 (다양한 모델 지원)
-        input_channels = None
-        conv_patterns = [
-            'conv1.weight',                    # BasicCNN
-            'features.0.weight',              # 일반적인 경우
-            'backbone.features.0.0.weight',   # MobileNetV2
-            'features.0.0.weight',            # 일반화 버전
-            'conv.weight', 
-            'conv1.conv.weight'
-        ]
+        input_channels = checkpoint.get('input_channels', 5)
+        model_name = checkpoint.get('model_name', None)
         
-        for pattern in conv_patterns:
-            for key in checkpoint['model_state_dict'].keys():
-                if pattern in key:
-                    input_channels = checkpoint['model_state_dict'][key].shape[1]
-                    print(f"🔍 Found input channels: {input_channels} (from {key})")
-                    break
-            if input_channels:
-                break
+        print(f"🔍 Input channels: {input_channels}, Model name: {model_name}")
         
-        if input_channels is None:
-            # 기본값 사용 (temporal_window=5로 추정)
-            input_channels = 5
-            print(f"⚠️ Could not detect input channels, using default: {input_channels}")
+        # 모델 생성 및 로드 (체크포인트 또는 파일명에서 모델 타입 읽기)
+        file_name = os.path.basename(self.checkpoint_path)
         
-        # 모델 생성 및 로드 (config.json에서 모델 타입 읽기)
-        model_name = 'basic'  # 기본값
-        config_path = os.path.join(os.path.dirname(self.checkpoint_path), 'config.json')
-        if os.path.exists(config_path):
-            try:
-                import json
-                with open(config_path, 'r') as f:
-                    config = json.load(f)
-                    model_name = config.get('model_name', 'basic')
-            except:
-                pass
+        # 체크포인트에서 model_name 읽기, 없으면 파일명에서 추론
+        model_name = checkpoint.get('model_name', None)
+        if model_name is None:
+            # 파일명에서 모델 이름 추론
+            if 'mobileone' in file_name.lower() or 's0' in file_name.lower():
+                model_name = 'mobileone_s0'
+                print(f"⚠️ [Warning] 'model_name' not found in checkpoint. Inferred from filename: {model_name}")
+            else:
+                model_name = 'mobilenet_v2'
+                print(f"⚠️ [Warning] 'model_name' not found in checkpoint. Using default: {model_name}")
+        else:
+            print(f"🔍 Model name: {model_name} (from checkpoint)")
         
-        print(f"🔧 Using model type: {model_name}")
-        model = get_model(model_name, input_channels=input_channels, output_dim=2)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        # 1. skeleton model (FP32)
+        model = get_model(model_name, input_channels=input_channels, output_dim=2, use_qat=False)
+        
+        # 2. Check qat mode
+        if self.use_quantized:
+            print(f"🎭 Mode: Quantized Inference")
+            
+            # MobileOne 모델의 경우 reparameterize 수행 (multi-branch -> single-branch)
+            if hasattr(model, 'reparameterize'):
+                print("🔄 Reparameterizing MobileOne model for inference...")
+                model.reparameterize()
+                print("✅ Reparameterization complete")
+
+            model.eval()
+            model = prepare_qat_model(model)             # QAT 모델 준비
+            model = convert_to_quantized(model)          # INT8 모델 변환
+        else:
+            print(f"🚀 Mode: Standard FP32 Inference")
+        
+        # 가중치 로드
+        try:
+            model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"✅ State dict loaded")
+        except Exception as e:
+            print(f"   ⚠️ Warning: Could not load state_dict: {e}")
+        
         model.to(self.device)
         model.eval()
-        
-        print(f"✅ Model loaded from {self.checkpoint_path}")
-        print(f"   Epoch: {checkpoint.get('epoch', 'N/A')}")
-        print(f"   Best Loss: {checkpoint.get('val_loss', 'N/A')}")
         
         return model, input_channels
     
@@ -109,12 +120,10 @@ class DVSInference:
         processor = BinProcessor(frame_width=frame_width, frame_height=frame_height, has_header=True)
         frames = processor.read_frames(bin_file_path, max_frames=max_frames)
         
-        # numpy 배열로 변환 및 정규화
+        # numpy 배열로 변환 및 고정 스케일링 (2bit 데이터: 0,1,2 → 0.0,0.5,1.0)
         individual_frames = []
         for frame in frames:
-            frame_array = np.array(frame.raw_data, dtype=np.float32)
-            if np.max(frame_array) > 0:
-                frame_array = frame_array / np.max(frame_array)  # 0-1 정규화
+            frame_array = np.array(frame.raw_data, dtype=np.float32) / 2.0  # 고정 스케일링
             individual_frames.append(frame_array)
         
         print(f"   Loaded {len(individual_frames)} frames")
@@ -124,21 +133,25 @@ class DVSInference:
         """단일 텐서 추론"""
         with torch.no_grad():
             input_tensor = input_tensor.to(self.device)
-            
+
+            inference_time = 0.0
             # 추론 시간 측정
             if measure_time and self.device.type == 'cuda':
-                start_time = torch.cuda.Event(enable_timing=True)
-                end_time = torch.cuda.Event(enable_timing=True)
-                start_time.record()
+                start = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
                 
+                start.record()
                 output = self.model(input_tensor)
+                end.record()
                 
-                end_time.record()
                 torch.cuda.synchronize()
-                inference_time = start_time.elapsed_time(end_time)
+                inference_time = start.elapsed_time(end)
+            elif measure_time:
+                start = time.time()
+                output = self.model(input_tensor)
+                inference_time = (time.time() - start) * 1000 # ms 단위
             else:
                 output = self.model(input_tensor)
-                inference_time = 0.0
             
             return output.cpu().numpy(), inference_time
     
@@ -284,29 +297,41 @@ def find_available_models():
     models = []
     for d in os.listdir('.'):
         if d.startswith('checkpoints_') and os.path.isdir(d):
+            config_path = os.path.join(d, 'config.json')
+            model_info = {'name': 'Unknown', 'temporal_window': 1, 'max_frames': 0, 'epochs': 0, 'roi_size': [512, 512], 'use_qat': False}
+            
+            # 디렉토리 이름에서 QAT 여부 확인
+            is_qat_from_dir = '_qat' in d
+            
+            if os.path.exists(config_path):
+                try:
+                    import json
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+                        tc = config.get('training_config', {})
+                        model_info = {
+                            'name': config.get('model_name', 'Unknown'),
+                            'temporal_window': tc.get('temporal_window', 1),
+                            'max_frames': tc.get('max_frames', 0),
+                            'epochs': tc.get('num_epochs', 0),
+                            'roi_size': tc.get('roi_size', [512, 512]),
+                            'use_qat': config.get('use_qat', is_qat_from_dir)
+                        }
+                except: pass
+                
             best_file = next((f for f in os.listdir(d) if f.endswith('_best.pth')), None)
-            if best_file:
-                config_path = os.path.join(d, 'config.json')
-                model_info = {'name': 'Unknown', 'temporal_window': 1, 'max_frames': 0, 'epochs': 0, 'roi_size': [512, 512]}
-                
-                if os.path.exists(config_path):
-                    try:
-                        import json
-                        with open(config_path, 'r') as f:
-                            config = json.load(f)
-                            tc = config.get('training_config', {})
-                            model_info = {
-                                'name': config.get('model_name', 'Unknown'),
-                                'temporal_window': tc.get('temporal_window', 1),
-                                'max_frames': tc.get('max_frames', 0),
-                                'epochs': tc.get('num_epochs', 0),
-                                'roi_size': tc.get('roi_size', [512, 512])
-                            }
-                    except:
-                        pass
-                
+            int8_file = next((f for f in os.listdir(d) if f.endswith('_int8.pth')), None)
+            
+            target_file = None
+            
+            if int8_file:
+                target_file = int8_file
+            elif best_file:
+                target_file = best_file
+
+            if target_file:
                 models.append({
-                    'path': os.path.join(d, best_file),
+                    'path': os.path.join(d, target_file),
                     'dir': d,
                     **model_info
                 })
@@ -324,13 +349,19 @@ def select_model():
     
     print(f"\n📋 사용 가능한 모델들 ({len(models)}개):")
     for i, model in enumerate(models, 1):
-        print(f"{i}. {model['name']} 모델 (윈도우:{model['temporal_window']}, 프레임:{model['max_frames']}, 에폭:{model['epochs']})")
-    
+        # use_qat 값에 따라 표시
+        if model['use_qat']:
+            mode_str = "INT8/CPU" # QAT면 INT8로 추론
+        else:
+            mode_str = "FP32/GPU"
+            
+        print(f" {i:<4} {model['name']:<20} {mode_str:<10} {model['temporal_window']:<8} {model['epochs']:<8}")
+
     # 사용자 선택
     import sys
     if not sys.stdin.isatty():
-        choice = "1"
-        print(f"\n자동 선택: 1")
+        print(f"\n✅ {models[0]['name']} 모델을 사용합니다.")
+        return models[0]
     else:
         try:
             choice = input(f"\n모델을 선택하세요 (1-{len(models)}, 기본값 1): ").strip() or "1"
@@ -340,10 +371,8 @@ def select_model():
     try:
         idx = int(choice) - 1
         selected = models[idx] if 0 <= idx < len(models) else models[0]
-        print(f"\n✅ {selected['name']} 모델을 선택했습니다.")
         return selected
     except (ValueError, IndexError):
-        print(f"\n✅ {models[0]['name']} 모델을 사용합니다.")
         return models[0]
 
 def main():
@@ -352,8 +381,12 @@ def main():
     if not selected_model:
         return
     
+    print(f"\n✅ Selected model: {selected_model['name']} (QAT = {selected_model['use_qat']})")
     try:
-        inferencer = DVSInference(selected_model['path'])
+        inferencer = DVSInference(
+            selected_model['path'],
+            use_quantized=selected_model['use_qat']
+        )
     except FileNotFoundError:
         print(f"❌ 체크포인트 파일을 찾을 수 없습니다: {selected_model['path']}")
         return
@@ -363,16 +396,28 @@ def main():
     benchmark_results = inferencer.benchmark(num_iterations=50)
     
     # 데이터 로드
-    bin_file_path = "/hai/home/jdj/dvs/data/gaussian_large.bin"
+    bin_file_path = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512.bin"
+    csv_labels_path = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512_labels.csv"
+    
     if os.path.exists(bin_file_path):
         individual_frames = inferencer.load_frames_from_bin(bin_file_path, max_frames=50)
     else:
         print("⚠️ 더미 데이터 사용")
-        individual_frames = [np.random.rand(720, 960).astype(np.float32) for _ in range(50)]
+        individual_frames = [np.random.rand(512, 512).astype(np.float32) for _ in range(50)]
+    
+    if not os.path.exists(csv_labels_path):
+        print(f"⚠️ CSV 레이블 파일을 찾을 수 없습니다: {csv_labels_path}")
+        print("   추론을 계속하지만 정확한 오차 계산이 불가능합니다.")
+        csv_labels_path = None
     
     # 추론 실행
     print(f"\n🔮 {selected_model['name']} 모델 추론...")
-    results = inferencer.predict_from_frames(individual_frames)
+    if csv_labels_path and os.path.exists(csv_labels_path):
+        results = inferencer.predict_from_frames(individual_frames, csv_labels_path)
+    else:
+        print("⚠️ CSV 레이블이 없어 추론만 수행합니다 (오차 계산 불가)")
+        # CSV 없이도 추론 가능하도록 수정 필요하지만, 일단 경고만 출력
+        results = {'predictions': [], 'times': [], 'errors': [], 'mean_time': 0, 'fps': 0, 'mean_error': 0, 'std_error': 0, 'targets': []}
     
     # 결과 출력
     print(f"\n📈 결과: {len(results['predictions'])}개, {results['mean_time']:.2f}ms, {results['fps']:.1f} FPS")

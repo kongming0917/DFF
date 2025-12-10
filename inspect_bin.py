@@ -119,6 +119,69 @@ def analyze_bin_file(bin_file, num_frames=3):
     print("=" * 70)
 
 
+def extract_headers_to_txt(bin_file, output_txt=None, max_frames=None):
+    """
+    bin 파일의 모든 프레임 헤더를 추출하여 txt 파일로 저장
+    
+    Args:
+        bin_file (str): 분석할 bin 파일 경로
+        output_txt (str): 출력 txt 파일 경로 (None이면 자동 생성)
+        max_frames (int): 최대 추출할 프레임 수 (None이면 전체)
+    """
+    # 프레임 크기 계산
+    frame_width = 960
+    frame_height = 720
+    header_size = 8
+    image_data_size = (frame_width * frame_height) // 4
+    frame_size = header_size + image_data_size
+    
+    # 출력 파일 경로 설정 (bin 파일과 동일한 경로, 확장자만 .txt로 변경)
+    if output_txt is None:
+        output_txt = os.path.splitext(bin_file)[0] + '.txt'
+    
+    print("=" * 70)
+    print(f"헤더 추출: {os.path.basename(bin_file)} → {os.path.basename(output_txt)}")
+    print("=" * 70)
+    
+    headers = []
+    frame_count = 0
+    
+    with open(bin_file, 'rb') as f:
+        while True:
+            # max_frames에 도달하면 종료
+            if max_frames is not None and frame_count >= max_frames:
+                break
+            
+            # 헤더 읽기
+            header_bytes = f.read(header_size)
+            if len(header_bytes) < header_size:
+                break
+            
+            # 헤더를 hex 문자열로 변환하여 저장
+            header_hex = header_bytes.hex()
+            headers.append(header_hex)
+            frame_count += 1
+            
+            # 이미지 데이터 건너뛰기
+            f.seek(image_data_size, 1)
+            
+            # 진행 상황 출력 (매 1000개마다)
+            if frame_count % 1000 == 0:
+                print(f"   처리 중: {frame_count}개 프레임...")
+    
+    # txt 파일로 저장
+    with open(output_txt, 'w') as f:
+        for header_hex in headers:
+            f.write(header_hex + '\n')
+    
+    print(f"\n✅ 헤더 추출 완료!")
+    print(f"   - 총 프레임 수: {len(headers):,}개")
+    print(f"   - 저장 위치: {output_txt}")
+    print(f"   - 파일 크기: {os.path.getsize(output_txt):,} bytes")
+    
+    return output_txt
+
+
 def main():
     """메인 함수 - 여기서 설정을 변경하세요"""
     
@@ -126,6 +189,8 @@ def main():
     data_dir = '/hai/home/jdj/dvs/data'      # 데이터 디렉토리 경로
     file_name = 'gaussian_large.bin'          # 분석할 bin 파일명
     num_frames = 3                            # 분석할 프레임 개수
+    extract_headers = True                    # 헤더 추출 여부
+    max_extract_frames = None                 # 헤더 추출 최대 프레임 수 (None이면 전체)
     # ============================================
     
     # 전체 파일 경로 생성
@@ -135,6 +200,11 @@ def main():
     if not os.path.exists(bin_file):
         print(f"❌ 오류: 파일을 찾을 수 없습니다: {bin_file}")
         return
+    
+    # 헤더 추출
+    if extract_headers:
+        extract_headers_to_txt(bin_file, max_frames=max_extract_frames)
+        print()
     
     # 분석 실행
     analyze_bin_file(bin_file, num_frames)
