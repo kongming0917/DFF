@@ -9,16 +9,10 @@ import torch.nn as nn
 import sys
 import os
 
-# birel 패키지 경로 추가
-dvs_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-birel_path = os.path.join(dvs_root, 'birel')
-if birel_path not in sys.path:
-    sys.path.insert(0, birel_path)
-
 # difflogic 및 birel 모듈 import
 try:
-    from difflogic import FusedLogicTreeBlock, LogicLayer
-    from birel.model import RegressionLayer, MultiOutputRegressionLayer
+    from birel.conv import Crossbar1x1Conv, TreeConvLayer, ORPool2d
+    from birel.model import RegressionLayer, LogicLayer
 except ImportError as e:
     print(f"Warning: Could not import difflogic or birel modules: {e}")
     print("Please ensure birel package is installed: pip install -e ./birel")
@@ -26,153 +20,96 @@ except ImportError as e:
 
 
 class LogicDVSNet(nn.Module):
-    """
-    DVS 레이저 중심점 탐지를 위한 Differentiable Logic Network
-    
-    CIFAR-10용 4-stage FusedLogicTreeBlock 구조를 사용하고,
-    마지막에 회귀 헤드를 적용하여 (x, y) 좌표를 예측합니다.
-    """
-    
-    def __init__(
-        self,
-        input_channels: int = 1,
-        num_neurons: int = 64,
-        output_dim: int = 2,
-        tree_depth: int = 3,
-        groups: int = 1,
-        tau: float = 1.0,
-        device: str = 'cuda'
-    ):
+    def __init__(self, input_channels=1, num_neurons=64, output_dim=2, tau=1.0, **kwargs):
         """
-        Args:
-            input_channels: 입력 채널 수 (DVS 이벤트 프레임)
-            num_neurons: 기본 뉴런 수 (k)
-            output_dim: 출력 차원 (좌표 수, 기본값 2 = x, y)
-            tree_depth: Logic tree 깊이
-            groups: 그룹 수
-            tau: 초기 temperature 파라미터
-            device: 연산 디바이스
+        CIFAR-10 im2col 아키텍처 기반의 DVS 레이저 중심점 탐지 모델
+        
+        구조 특징:
+        - Crossbar1x1Conv (Channel Mixing) -> TreeConvLayer (Spatial Logic Conv) -> ORPool2d (Downsampling)
+        - 4 Stages 구성
+        - Regression Head (좌표 예측)
         """
         super().__init__()
-        
-        self.k = num_neurons
+
         self.output_dim = output_dim
         self.tau = tau
-        self.device = device
+        self.k = num_neurons
         
-        # CIFAR-10 스타일의 4-Stage Logic Backbone
-        # Stage 1: Input -> k
-        # Stage 2: k -> 4k
-        # Stage 3: 4k -> 16k
-        # Stage 4: 16k -> 32k
-        self.features = nn.Sequential(
-            # Stage 1: Input -> k (첫 레이어는 groups=1)
-            FusedLogicTreeBlock(
-                input_channels, self.k,
-                kernel_size=3, padding=1,
-                tree_depth=tree_depth, groups=1,
-                tau=tau, device=device
-            ),
-            
-            # Stage 2: k -> 4k
-            FusedLogicTreeBlock(
-                self.k, 4*self.k,
-                kernel_size=3, padding=1,
-                tree_depth=tree_depth, groups=groups,
-                tau=tau, device=device
-            ),
-            
-            # Stage 3: 4k -> 16k
-            FusedLogicTreeBlock(
-                4*self.k, 16*self.k,
-                kernel_size=3, padding=1,
-                tree_depth=tree_depth, groups=groups,
-                tau=tau, device=device
-            ),
-            
-            # Stage 4: 16k -> 32k
-            FusedLogicTreeBlock(
-                16*self.k, 32*self.k,
-                kernel_size=3, padding=1,
-                tree_depth=tree_depth, groups=groups,
-                tau=tau, device=device
-            )
+        # LogicLayer 공통 설정 (im2col 모드에서는 implementation='cuda' 사용)
+        base_logic_layer_kw = dict(
+            ste=False,
+            implementation='cuda', 
+            init='residual',
+            tau=tau
         )
         
-        # Global Average Pooling으로 공간 차원 축소
-        # FusedLogicTreeBlock은 내부적으로 pooling을 포함할 수 있으므로
-        # 입력 크기에 따라 최종 feature map 크기가 결정됩니다.
-        # 편의상 AdaptiveAvgPool을 사용하여 차원을 고정합니다.
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        # Crossbar의 num_blocks 설정을 위한 안전장치 (최소 1)
+        # 원본 코드에서는 k//16을 사용하지만, k가 작을 경우를 대비해 max(1, ...) 처리 권장
+        nb = max(1, k // 16)
+
+        self.features = nn.Sequential(
+            # --- Stage 1 ---
+            # Input -> k
+            # Crossbar: Channel 정보를 섞어서 TreeConv 입력에 맞게 뻥튀기 (x2)
+            Crossbar1x1Conv(in_channels=input_channels, out_channels=k*2, num_blocks=1, connections='unique'),
+            TreeConvLayer(in_channels=k*2, out_channels=k, kernel_size=3, padding=1, stride=1, 
+                          k=k, logic_layer_kwargs=base_logic_layer_kw),
+            ORPool2d(kernel_size=2, stride=2), # 128 -> 64
+            
+            # --- Stage 2 ---
+            # k -> 4k
+            Crossbar1x1Conv(in_channels=k, out_channels=4*k*2, num_blocks=nb, connections='unique'),
+            TreeConvLayer(in_channels=4*k*2, out_channels=4*k, kernel_size=3, padding=1, stride=1, 
+                          k=4*k, logic_layer_kwargs=base_logic_layer_kw),
+            ORPool2d(kernel_size=2, stride=2), # 64 -> 32
+            
+            # --- Stage 3 ---
+            # 4k -> 16k
+            Crossbar1x1Conv(in_channels=4*k, out_channels=16*k*2, num_blocks=nb, connections='unique'),
+            TreeConvLayer(in_channels=16*k*2, out_channels=16*k, kernel_size=3, padding=1, stride=1, 
+                          k=16*k, logic_layer_kwargs=base_logic_layer_kw),
+            ORPool2d(kernel_size=2, stride=2), # 32 -> 16
+            
+            # --- Stage 4 ---
+            # 16k -> 32k
+            Crossbar1x1Conv(in_channels=16*k, out_channels=32*k*2, num_blocks=nb, connections='unique'),
+            TreeConvLayer(in_channels=32*k*2, out_channels=32*k, kernel_size=3, padding=1, stride=1, 
+                          k=32*k, logic_layer_kwargs=base_logic_layer_kw),
+            ORPool2d(kernel_size=2, stride=2)  # 16 -> 8
+        )
+        
+        # --- Regression Head ---
+        # 최종 Feature Map 크기: (Batch, 32*k, H', W')
+        # DVS 입력(128x128) 기준 -> Stage 4 통과 후 (8x8) 예상
+        
+        self.gap = nn.AdaptiveAvgPool2d((1, 1))
         self.flatten = nn.Flatten()
         
-        # Regression Head
-        # 입력 차원: 32*k (pooling 후)
-        # 중간 레이어를 통해 feature reduction 후 회귀 출력 생성
-        feature_dim = 32 * self.k
-        
-        # 중간 LogicLayer들 (feature reduction)
-        self.reg_head = nn.Sequential(
-            LogicLayer(feature_dim, 512, tau=tau, device=device),
-            LogicLayer(512, 128, tau=tau, device=device),
+        # Classifier 대신 좌표 예측용 Regressor 구성
+        self.regressor = nn.Sequential(
+            LogicLayer(32*k, 512, **base_logic_layer_kw),
+            LogicLayer(512, 128, **base_logic_layer_kw),
+            # 마지막은 실수 좌표를 출력해야 하므로 RegressionLayer 사용
+            RegressionLayer(128, output_dim) 
         )
-        
-        # 최종 회귀 레이어: 128 -> output_dim (x, y)
-        # MultiOutputRegressionLayer 사용 시 입력 차원을 output_dim의 배수로 맞춰야 함
-        # 간단하게 Linear 레이어를 사용하는 것이 더 안정적
-        self.reg_output = nn.Linear(128, output_dim)
-        
-        # 또는 MultiOutputRegressionLayer 사용 (더 복잡하지만 logic gate 기반)
-        # 입력 차원을 output_dim의 배수로 조정 필요
-        # self.reg_output_dim = (128 // output_dim) * output_dim  # 128 -> 128 (output_dim=2인 경우)
-        # self.reg_output = MultiOutputRegressionLayer(
-        #     k=output_dim,
-        #     tau=tau,
-        #     device=device,
-        #     use_ternary=True
-        # )
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass
-        
-        Args:
-            x: 입력 텐서 (B, C, H, W)
-            
-        Returns:
-            출력 텐서 (B, output_dim) - (x, y) 좌표
-        """
-        # Feature extraction
+
+    def forward(self, x):
         x = self.features(x)
-        
-        # Global average pooling
-        x = self.pool(x)
+        x = self.gap(x)
         x = self.flatten(x)
-        
-        # Regression head
-        x = self.reg_head(x)
-        
-        # 최종 회귀 출력
-        # Linear 레이어 사용 (간단하고 안정적)
-        output = self.reg_output(x)
-        
-        # 출력이 (B, output_dim) 형태임을 보장
-        assert output.shape == (x.shape[0], self.output_dim), \
-            f"Output shape mismatch: {output.shape} != ({x.shape[0]}, {self.output_dim})"
-        
-        return output
-    
-    def set_tau(self, tau: float):
-        """
-        학습 중 tau 스케줄링을 위한 함수
-        
-        Args:
-            tau: 새로운 temperature 값
-        """
-        self.tau = tau
+        x = self.regressor(x)
+        return x
+
+    def set_tau(self, tau):
+        """학습 중 모든 Logic Layer의 tau 값을 업데이트"""
         for m in self.modules():
+            # TreeConvLayer, LogicLayer 등 tau 속성이 있는 모든 모듈 업데이트
             if hasattr(m, 'tau'):
                 m.tau = tau
+            # Crossbar1x1Conv나 TreeConvLayer 내부의 로직 레이어들도 재귀적으로 처리됨
+            # 하지만 명시적으로 내부 kwargs 등을 업데이트해야 할 수도 있음
+            if hasattr(m, 'logic_layer_kwargs'):
+                m.logic_layer_kwargs['tau'] = tau
     
     def get_model_info(self) -> dict:
         """모델 정보 반환"""
@@ -214,23 +151,40 @@ def get_model(
         **kwargs
     )
 
+def get_model(
+    input_channels: int = 1,
+    num_neurons: int = 64,
+    output_dim: int = 2,
+    tau: float = 1.0,  # [수정] 명시적 인자 추가
+    **kwargs
+) -> LogicDVSNet:
+    return LogicDVSNet(
+        input_channels=input_channels,
+        num_neurons=num_neurons,
+        output_dim=output_dim,
+        tau=tau,
+        **kwargs
+    )
+
 
 if __name__ == "__main__":
     # 모델 테스트
     print("🧪 Testing LogicDVSNet Model")
     print("=" * 50)
     
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
     # 테스트 입력 (배치=2, 채널=1, 높이=128, 너비=128)
-    test_input = torch.randn(2, 1, 128, 128)
+    test_input = torch.randn(2, 1, 128, 128).to(device)
     print(f"Input shape: {test_input.shape}")
     
     # 모델 생성
-    model = LogicDVSNet(
+    model = get_model(
         input_channels=1,
-        num_neurons=32,  # 작은 모델로 테스트
+        num_neurons=32, 
         output_dim=2,
         tau=1.0
-    )
+    ).to(device)
     
     # 모델 정보 출력
     info = model.get_model_info()
@@ -244,7 +198,6 @@ if __name__ == "__main__":
         output = model(test_input)
         print(f"\n✅ Forward pass successful!")
         print(f"   Output shape: {output.shape}")
-        print(f"   Output range: [{output.min().item():.3f}, {output.max().item():.3f}]")
         print(f"   Sample output: {output[0].tolist()}")
     
     # Tau 스케줄링 테스트
