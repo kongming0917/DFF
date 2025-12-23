@@ -3831,8 +3831,8 @@ if __name__ == '__main__':
             print(f"\nFinal results: accuracy = {final_acc:.4f}, pruned_channels = {final_pruned_channels}/{final_total_channels} ({final_prune_ratio:.2f}%)")
         
             # 최종 분석 (finding_live_nodes_by_channel이 이미 ChannelMaskLayer를 처리함)
-            analysis_bundle_final = finding_live_nodes_by_channel_with_fusion(model, in_channels, args, device='cuda', verbose=True)
-            summarize_and_print_analysis(analysis_bundle_final)
+            #analysis_bundle_final = finding_live_nodes_by_channel_with_fusion(model, in_channels, args, device='cuda', verbose=True)
+            #summarize_and_print_analysis(analysis_bundle_final)
             
 
             if args.pruned_eid:
@@ -4133,7 +4133,7 @@ if __name__ == '__main__':
 
             if test_accuracy_eval_mode > best_acc:
                 best_acc = test_accuracy_eval_mode
-                
+                '''
                 analysis_bundle = finding_live_nodes_by_channel(
                     model, in_channels, args, device='cuda', verbose=False
                 )
@@ -4150,7 +4150,7 @@ if __name__ == '__main__':
                     'features_dead_ratio': feat_dead_ratio,
                     'overall_dead_ratio': overall_dead_ratio
                 }
-                
+                '''
                 # 기본 결과 딕셔너리 'r'에 분석 결과(요약+분포)를 추가
                 r.update(summary_for_json)
                 r['distributions'] = analysis_bundle.get('distributions', {})
