@@ -457,8 +457,8 @@ def create_brownian_motion_dataset(
 def main():
     """메인 함수"""
     # ========== 설정 ==========
-    input_bin = "/hai/home/jdj/dvs/data/gaussian_large.bin"
-    output_bin = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512.bin"
+    input_bin = "/hai/home/jdj/dvs/sim/data/gaussian_large.bin"
+    output_bin = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
     
     # Brownian motion 설정
     config = BrownianMotionConfig(

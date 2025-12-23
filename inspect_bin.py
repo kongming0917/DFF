@@ -186,7 +186,7 @@ def main():
     """메인 함수 - 여기서 설정을 변경하세요"""
     
     # ========== 설정 (여기를 수정하세요) ==========
-    data_dir = '/hai/home/jdj/dvs/data'      # 데이터 디렉토리 경로
+    data_dir = '/hai/home/jdj/dvs/sim/data'      # 데이터 디렉토리 경로
     file_name = 'gaussian_large.bin'          # 분석할 bin 파일명
     num_frames = 3                            # 분석할 프레임 개수
     extract_headers = True                    # 헤더 추출 여부

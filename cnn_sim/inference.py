@@ -358,7 +358,7 @@ def main():
     benchmark_results = inferencer.benchmark(num_iterations=50)
     
     # 데이터 로드
-    bin_file_path = "/hai/home/jdj/dvs/data/gaussian_large.bin"
+    bin_file_path = "/hai/home/jdj/dvs/sim/data/gaussian_large.bin"
     if os.path.exists(bin_file_path):
         individual_frames = inferencer.load_frames_from_bin(bin_file_path, max_frames=50)
     else:

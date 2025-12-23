@@ -724,8 +724,8 @@ if __name__ == "__main__":
     print("=" * 60)
     
     # Brownian Motion 데이터셋 파일 경로
-    BIN_FILE_PATH = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512.bin"
-    CSV_LABELS_PATH = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512_labels.csv"
+    BIN_FILE_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
+    CSV_LABELS_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
     
     # 학습 하이퍼파라미터 설정
     LEARNING_RATE = 0.001  # 학습률

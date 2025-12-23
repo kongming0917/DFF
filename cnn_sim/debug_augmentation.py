@@ -239,7 +239,7 @@ def main():
     print("=" * 50)
     
     # 1. 실제 DVS 데이터 로드
-    bin_file_path = "/hai/home/jdj/dvs/data/gaussian_large.bin"
+    bin_file_path = "/hai/home/jdj/dvs/sim/data/gaussian_large.bin"
     
     if not os.path.exists(bin_file_path):
         print(f"❌ DVS 데이터 파일을 찾을 수 없음: {bin_file_path}")

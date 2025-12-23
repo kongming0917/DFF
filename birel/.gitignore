@@ -1,0 +1,36 @@
+# 모든 logs_ 로 시작하는 디렉토리 무시
+logs_*/
+
+# 8자리 숫자 디렉토리 무시 (예: 20250510/)
+20??????/
+
+# Vim swap, backup, undo files
+*.swp
+*.swo
+*.swn
+*.un~
+*~
+
+__pycache__/
+*.pyc
+
+# Build Artifacts and Temporary Files
+build/
+dist/
+*.egg-info/
+*.so
+*.o
+*.dll
+
+# NFS Temp files (from previous conversations)
+.nfs*# Build Artifacts and Temporary Files
+build/
+dist/
+*.egg-info/
+*.so
+*.o
+*.dll
+
+# NFS Temp files (from previous conversations)
+.nfs*
+

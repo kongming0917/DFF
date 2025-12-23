@@ -39,6 +39,10 @@ class MobileOneS0(nn.Module):
                  inference_mode: bool = False):
         super(MobileOneS0, self).__init__()
         
+        # Quantization
+        self.quant = QuantStub()
+        self.dequant = DeQuantStub()
+        
         # 1. Backbone 생성
         self.backbone = mobileone(variant=variant, num_classes = 1000, inference_mode=inference_mode)
         
@@ -69,8 +73,11 @@ class MobileOneS0(nn.Module):
         self.sigmoid = nn.Sigmoid()
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.quant(x)
         # Backbone + Head 통과
         x = self.backbone(x)
+        
+        x = self.dequant(x)
         # Sigmoid로 0-1 범위 제한 (dataset에서 이미 정규화 됨)
         return self.sigmoid(x)
     
@@ -116,20 +123,6 @@ def get_model(model_name: str, use_qat: bool = False, **kwargs) -> nn.Module:
     
     return model
 
-class QATWrapper(nn.Module):
-    """QAT 모델 래퍼 - QAT 모델을 사용하기 위한 래퍼"""
-    
-    def __init__(self, model: nn.Module):
-        super(QATWrapper, self).__init__()
-        self.quant = QuantStub()
-        self.model = model
-        self.dequant = DeQuantStub()
-        
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.quant(x)
-        x = self.model(x)
-        x = self.dequant(x)
-        return x
 
 def fuse_mobilenetv2_layers(model):
     """
@@ -169,18 +162,14 @@ def prepare_qat_model(model: nn.Module) -> nn.Module:
         
         print("🔢 Preparing model for QAT (int8 quantization, per-channel for all layers)...")
         
-        # Wrap model
-        model = QATWrapper(model)
-        
         # 모델을 학습 모드로 설정 (QAT는 학습 모드에서만 작동)
         model.train()
         model.to('cpu') # 설정 안전성 확보
 
-        # Fuse MobileNetV2 layers
-        inner_model = model.model
-        if hasattr(inner_model, 'backbone') and 'MobileNetV2' in str(type(inner_model.backbone)):
+        # Fuse MobileNetV2 layers (QATWrapper 없이 모델에 quant/dequant가 포함된 상태 가정)
+        if hasattr(model, 'backbone') and 'MobileNetV2' in str(type(model.backbone)):
              # MobileNetV2인 경우 퓨전 수행
-             fuse_mobilenetv2_layers(inner_model)
+             fuse_mobilenetv2_layers(model)
 
         # 1. Activation Observer (공통)
         act_observer = FakeQuantize.with_args(

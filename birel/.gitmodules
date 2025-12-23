@@ -1,0 +1,3 @@
+[submodule "difflogic"]
+	path = difflogic
+	url = git@github.com:haiyonsei/difflogic.git

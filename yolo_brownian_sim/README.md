@@ -41,7 +41,7 @@ yolo_sim/
 ### 학습
 
 ```bash
-cd /hai/home/jdj/dvs/yolo_sim
+cd /hai/home/jdj/dvs/sim/yolo_sim
 python train.py
 ```
 
@@ -52,7 +52,7 @@ from train import train_yolo
 
 train_yolo(
     model_name='yolo_tiny_laser',
-    bin_file_path="/hai/home/jdj/dvs/data/gaussian_large.bin",
+    bin_file_path="/hai/home/jdj/dvs/sim/data/gaussian_large.bin",
     max_frames=500,
     num_epochs=50,
     batch_size=4,

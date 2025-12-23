@@ -355,7 +355,7 @@ def compare_methods(
 
 if __name__ == "__main__":
     # 설정
-    GROUND_TRUTH_FILE = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512_labels.csv"
+    GROUND_TRUTH_FILE = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
     
     # 평가할 방법들 (CSV 파일 경로)
     PREDICTION_FILES = {

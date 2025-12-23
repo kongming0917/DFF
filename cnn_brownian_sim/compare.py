@@ -347,30 +347,30 @@ def main():
     models_to_compare = [
         {
             'name': 'MobileNetV2 (Standard)',
-            'path': '/hai/home/jdj/dvs/cnn_brownian_sim/checkpoints_mobilenet_v2/mobilenet_v2_best.pth',
+            'path': '/hai/home/jdj/dvs/sim/cnn_brownian_sim/checkpoints_mobilenet_v2/mobilenet_v2_best.pth',
             'quantized': False
         },
         # {
         #     'name': 'MobileNetV2 (QAT)',
-        #     'path': '/hai/home/jdj/dvs/cnn_brownian_sim/checkpoints_mobilenet_v2_qat/mobilenet_v2_qat_int8.pth',
+        #     'path': '/hai/home/jdj/dvs/sim/cnn_brownian_sim/checkpoints_mobilenet_v2_qat/mobilenet_v2_qat_int8.pth',
         #     'quantized': True
         # },
         # 예시: 추가 모델 비교 (필요 시 주석 해제)
         {
             'name': 'MobileOne-S0 (Standard)',
-            'path': '/hai/home/jdj/dvs/cnn_brownian_sim/checkpoints_mobileone_s0/mobileone_s0_best.pth',
+            'path': '/hai/home/jdj/dvs/sim/cnn_brownian_sim/checkpoints_mobileone_s0/mobileone_s0_best.pth',
             'quantized': False
         },
         {
             'name': 'MobileOne-S0 (QAT)',
-            'path': '/hai/home/jdj/dvs/cnn_brownian_sim/checkpoints_mobileone_s0_qat/mobileone_s0_int8.pth',
+            'path': '/hai/home/jdj/dvs/sim/cnn_brownian_sim/checkpoints_mobileone_s0_qat/mobileone_s0_int8.pth',
             'quantized': True
         }
     ]
     # ============================================================
     
-    bin_file = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512.bin"
-    csv_labels = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512_labels.csv"
+    bin_file = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
+    csv_labels = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
     
     # 결과 저장 디렉토리 설정
     output_dir = "compare_qnt"

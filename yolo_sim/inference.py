@@ -450,7 +450,7 @@ def run_inference(
 if __name__ == "__main__":
     # 예시 실행
     checkpoint_path = "checkpoints_yolo_tiny_laser/yolo_tiny_laser_best.pth"
-    bin_file_path = "/hai/home/jdj/dvs/data/gaussian_large.bin"
+    bin_file_path = "/hai/home/jdj/dvs/sim/data/gaussian_large.bin"
     
     if os.path.exists(checkpoint_path):
         run_inference(

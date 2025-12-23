@@ -292,7 +292,7 @@ tensorboard >= 2.8.0  # 학습 모니터링
 #### DVS 데이터 로딩 실패
 ```bash
 # filter_sim 경로 확인
-export PYTHONPATH=/hai/home/jdj/dvs/filter_sim:$PYTHONPATH
+export PYTHONPATH=/hai/home/jdj/dvs/sim/filter_sim:$PYTHONPATH
 ```
 
 #### GPU 메모리 부족
@@ -345,7 +345,7 @@ model_name = "mobilenet_v2_light"
 
 프로젝트 관련 문의사항이나 개선 제안이 있으시면 언제든 연락 주세요!
 
-**프로젝트 저장소**: `/hai/home/jdj/dvs/`
+**프로젝트 저장소**: `/hai/home/jdj/dvs/sim/`
 
 ---
 

@@ -338,7 +338,7 @@ def visualize_max_movement_frames(
 def main():
     """메인 함수"""
     # ========== 설정 ==========
-    bin_file = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512.bin"
+    bin_file = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
     num_top_frames = 10  # 상위 몇 개 프레임 시각화할지
     max_frames = None  # None이면 전체, 또는 숫자 지정
     # =========================

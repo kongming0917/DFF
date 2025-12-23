@@ -299,8 +299,8 @@ def export_center_comparison(
 
 if __name__ == "__main__":
     # 설정
-    #BIN_FILE_PATH = "/hai/home/jdj/dvs/data/1kHz_large.bin"
-    BIN_FILE_PATH = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512.bin"
+    #BIN_FILE_PATH = "/hai/home/jdj/dvs/sim/data/1kHz_large.bin"
+    BIN_FILE_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
     OUTPUT_DIR = "csv_results"
     #MAX_FRAMES = None  # None이면 모든 프레임 처리
     MAX_FRAMES = 100   # gaussian 데이터는 매우 느려서 50프레임만 테스트

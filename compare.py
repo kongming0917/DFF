@@ -14,13 +14,19 @@ import seaborn as sns
 import torch
 import os
 import sys
+import os
 from typing import Dict, Tuple, Optional
 
-# 경로 추가
-sys.path.append('/hai/home/jdj/dvs')  # lib 모듈 사용을 위해 루트 추가
-sys.path.append('/hai/home/jdj/dvs/cnn_sim')
-sys.path.append('/hai/home/jdj/dvs/filter_sim')
-sys.path.append('/hai/home/jdj/dvs/yolo_sim')
+# 경로 추가 (동적 경로 사용)
+dvs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if dvs_root not in sys.path:
+    sys.path.insert(0, dvs_root)
+sim_root = os.path.dirname(os.path.abspath(__file__))
+if sim_root not in sys.path:
+    sys.path.insert(0, sim_root)
+sys.path.insert(0, os.path.join(sim_root, 'cnn_sim'))
+sys.path.insert(0, os.path.join(sim_root, 'filter_sim'))
+sys.path.insert(0, os.path.join(sim_root, 'yolo_sim'))
 
 from cnn_sim.inference import DVSInference
 from lib.bin_processor import BinProcessor  # lib에서 가져오기
@@ -565,11 +571,11 @@ def main():
     print("="*80)
     
     # 경로 설정
-    cnn_checkpoint = "/hai/home/jdj/dvs/cnn_sim/checkpoints_mobilenet_v2/mobilenet_best.pth"
-    yolo_checkpoint = "/hai/home/jdj/dvs/yolo_sim/checkpoints_yolo_tiny_laser/yolo_tiny_laser_best.pth"
-    filter_csv = "/hai/home/jdj/dvs/filter_sim/csv_results/spatial_filter_kalman.csv"
-    bin_file = "/hai/home/jdj/dvs/data/gaussian_large.bin"
-    output_path = "/hai/home/jdj/dvs/cnn_yolo_filter_comparison.png"
+    cnn_checkpoint = "/hai/home/jdj/dvs/sim/cnn_sim/checkpoints_mobilenet_v2/mobilenet_best.pth"
+    yolo_checkpoint = "/hai/home/jdj/dvs/sim/yolo_sim/checkpoints_yolo_tiny_laser/yolo_tiny_laser_best.pth"
+    filter_csv = "/hai/home/jdj/dvs/sim/filter_sim/csv_results/spatial_filter_kalman.csv"
+    bin_file = "/hai/home/jdj/dvs/sim/data/gaussian_large.bin"
+    output_path = "/hai/home/jdj/dvs/sim/cnn_yolo_filter_comparison.png"
     
     # 파일 존재 확인
     if not os.path.exists(cnn_checkpoint):

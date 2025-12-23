@@ -484,7 +484,7 @@ def visualize_worst_cases_training(
 
 def train_yolo(
     model_name: str = 'yolo_tiny',
-    bin_file_path: str = "/hai/home/jdj/dvs/data/gaussian_large.bin",
+    bin_file_path: str = "/hai/home/jdj/dvs/sim/data/gaussian_large.bin",
     max_frames: int = 500,
     num_epochs: int = 50,
     batch_size: int = 4,

@@ -488,8 +488,8 @@ def visualize_worst_cases_training(
 
 def train_yolo(
     model_name: str = 'yolo_tiny',
-    bin_file_path: str = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512.bin",
-    csv_labels_path: str = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512_labels.csv",
+    bin_file_path: str = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin",
+    csv_labels_path: str = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv",
     max_frames: int = 500,
     num_epochs: int = 50,
     batch_size: int = 4,
@@ -731,8 +731,8 @@ if __name__ == "__main__":
     print("=" * 60)
     
     # 파일 경로 확인
-    BIN_FILE_PATH = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512.bin"
-    CSV_LABELS_PATH = "/hai/home/jdj/dvs/data/gaussian_brownian_512x512_labels.csv"
+    BIN_FILE_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
+    CSV_LABELS_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
     
     if not os.path.exists(BIN_FILE_PATH):
         print(f"❌ DVS 데이터 파일을 찾을 수 없습니다: {BIN_FILE_PATH}")

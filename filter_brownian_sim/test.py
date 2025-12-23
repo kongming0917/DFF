@@ -529,9 +529,9 @@ if __name__ == "__main__":
         #     description="Density + Spatial"
         # )
     ], 
-    # bin_file_path="/hai/home/jdj/dvs/data/low_freq_large.bin",  # 실제 파일 사용
-    # bin_file_path="/hai/home/jdj/dvs/data/1kHz_large.bin",  # 실제 파일 사용
-    bin_file_path="/hai/home/jdj/dvs/data/gaussian_brownian_512x512.bin",  # Brownian motion dataset
+    # bin_file_path="/hai/home/jdj/dvs/sim/data/low_freq_large.bin",  # 실제 파일 사용
+    # bin_file_path="/hai/home/jdj/dvs/sim/data/1kHz_large.bin",  # 실제 파일 사용
+    bin_file_path="/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin",  # Brownian motion dataset
     
     max_frames=10,
     visualize=True,

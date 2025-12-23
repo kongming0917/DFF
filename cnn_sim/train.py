@@ -560,7 +560,7 @@ if __name__ == "__main__":
     print("=" * 60)
     
     # 실제 DVS 데이터 파일 경로
-    BIN_FILE_PATH = "/hai/home/jdj/dvs/data/gaussian_large.bin"
+    BIN_FILE_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_large.bin"
     
     # 학습 하이퍼파라미터 설정
     LEARNING_RATE = 0.001  # 학습률
