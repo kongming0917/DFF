@@ -34,6 +34,7 @@ class LogicDVSNet(nn.Module):
         self.output_dim = output_dim
         self.tau = tau
         self.k = num_neurons
+        k = num_neurons
         
         # LogicLayer 공통 설정 (im2col 모드에서는 implementation='cuda' 사용)
         base_logic_layer_kw = dict(
@@ -90,7 +91,7 @@ class LogicDVSNet(nn.Module):
             LogicLayer(32*k, 512, **base_logic_layer_kw),
             LogicLayer(512, 128, **base_logic_layer_kw),
             # 마지막은 실수 좌표를 출력해야 하므로 RegressionLayer 사용
-            RegressionLayer(128, output_dim) 
+            RegressionLayer(output_dim) 
         )
 
     def forward(self, x):
@@ -98,7 +99,7 @@ class LogicDVSNet(nn.Module):
         x = self.gap(x)
         x = self.flatten(x)
         x = self.regressor(x)
-        return x
+        return x.view(-1, self.output_dim)
 
     def set_tau(self, tau):
         """학습 중 모든 Logic Layer의 tau 값을 업데이트"""
@@ -174,13 +175,13 @@ if __name__ == "__main__":
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    # 테스트 입력 (배치=2, 채널=1, 높이=128, 너비=128)
-    test_input = torch.randn(2, 1, 128, 128).to(device)
+    # 테스트 입력 (Batch, Input Channels, Height, Width))
+    test_input = torch.randn(2, 5, 512, 512).to(device)
     print(f"Input shape: {test_input.shape}")
     
     # 모델 생성
     model = get_model(
-        input_channels=1,
+        input_channels=5,
         num_neurons=32, 
         output_dim=2,
         tau=1.0

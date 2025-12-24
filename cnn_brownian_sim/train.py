@@ -573,9 +573,7 @@ def load_individual_frames_from_bin(bin_file_path: str, max_frames: Optional[int
     
     # DVS bin 파일이 존재하는지 확인
     if not os.path.exists(bin_file_path):
-        print(f"❌ Bin file not found: {bin_file_path}")
-        print("🔄 Using dummy frames for testing...")
-        return _create_dummy_individual_frames(max_frames or 100)
+        raise FileNotFoundError(f"Bin file not found: {bin_file_path}")
     
     try:
         # 실제 DVS bin 파일 로딩
@@ -604,43 +602,7 @@ def load_individual_frames_from_bin(bin_file_path: str, max_frames: Optional[int
         return individual_frames
         
     except Exception as e:
-        print(f"⚠️ Error loading bin file: {e}")
-        print("🔄 Falling back to dummy frames...")
-        return _create_dummy_individual_frames(max_frames or 100)
-
-
-def _create_dummy_individual_frames(num_frames: int, center: tuple = (480, 294)) -> List[np.ndarray]:
-    """개별 timestamp 기반 더미 프레임 생성"""
-    frames = []
-    
-    print(f"   Creating {num_frames} individual dummy frames centered at {center}")
-    
-    for i in range(num_frames):
-        # 각 프레임은 하나의 timestamp를 나타냄
-        frame = np.zeros((720, 960), dtype=np.float32)
-        
-        # 중심 주변에 가우시안 분포로 이벤트 생성 (프레임당 50-200개)
-        events_per_frame = np.random.randint(50, 200)
-        
-        for _ in range(events_per_frame):
-            x = int(np.random.normal(center[0], 25))  # 레이저 스팟 크기
-            y = int(np.random.normal(center[1], 25))
-            
-            # 센서 범위 내로 제한
-            x = max(0, min(959, x))
-            y = max(0, min(719, y))
-            
-            # 강도 누적 (개별 timestamp에서의 이벤트 밀도)
-            frame[y, x] += 1.0
-        
-        # 정규화
-        if np.max(frame) > 0:
-            frame = frame / np.max(frame)
-        
-        frames.append(frame)
-    
-    print(f"   ✅ Generated {len(frames)} individual frames")
-    return frames
+        raise RuntimeError(f"Error loading bin file: {e}") from e
 
 
 def train_brownian_model(

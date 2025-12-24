@@ -8,9 +8,6 @@ import torch
 import numpy as np
 import os
 import matplotlib
-# GUI 환경 확인 후 백엔드 설정
-if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
-    matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import json
 from typing import Dict, List, Optional, Tuple, Any

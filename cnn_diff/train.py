@@ -16,23 +16,39 @@ from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 from tqdm import tqdm
 import matplotlib
-# GUI 환경 확인 후 백엔드 설정
-if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
-    matplotlib.use('Agg')
+
 import matplotlib.pyplot as plt
 
-# 경로 설정
+# 경로 설정 (현재 파일 기준 상위 2단계 폴더를 path에 추가)
 dvs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if dvs_root not in sys.path:
     sys.path.insert(0, dvs_root)
 
 # 모듈 import
-from model import LogicDVSNet, get_model
-from dataset import DVSDataset, create_train_val_loaders
-from utils import EarlyStopping, ModelCheckpoint, MetricsTracker, visualize_predictions
+try:
+    from model import LogicDVSNet, get_model
+    from dataset import DVSDataset, create_train_val_loaders, load_individual_frames_from_bin
+    from utils import ModelCheckpoint, MetricsTracker, visualize_predictions
+except ImportError as e:
+    print(f"[Error] 모듈 import 실패: {e}")
+    print("model.py, dataset.py, utils.py가 올바른 위치에 있는지 확인해주세요.")
+    sys.exit(1)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"🔧 Using device: {device}")
+
+class DualLogger(object):
+    def __init__(self, filename):
+        self.filename = filename
+        self.log = open(filename, 'w')
+    
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+    
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
 
 
 class LogicDVSTrainer:
@@ -48,8 +64,10 @@ class LogicDVSTrainer:
         tau_end: float = 0.1,
         weight_decay: float = 0.002,
         save_dir: str = 'checkpoints',
+        result_dir: str = 'result',
         num_epochs: int = 100,
-        patience: int = 15
+        patience: int = 15,
+        run_name: str = 'exp'
     ):
         """
         Args:
@@ -61,8 +79,9 @@ class LogicDVSTrainer:
             tau_end: 최종 tau 값
             weight_decay: 가중치 감쇠 (정규화)
             save_dir: 체크포인트 저장 디렉토리
+            result_dir: 결과 이미지 저장 디렉토리
             num_epochs: 에폭 수
-            patience: Early stopping patience
+            patience: Early stopping patience (여기서는 scheduler용)
         """
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -72,7 +91,8 @@ class LogicDVSTrainer:
         self.tau_end = tau_end
         self.num_epochs = num_epochs
         self.save_dir = save_dir
-        self.result_dir = 'result'
+        self.result_dir = result_dir
+        
         os.makedirs(self.save_dir, exist_ok=True)
         os.makedirs(self.result_dir, exist_ok=True)
         
@@ -88,37 +108,37 @@ class LogicDVSTrainer:
         
         # Learning rate scheduler
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='min', factor=0.5, patience=8, verbose=True
+            self.optimizer, mode='min', factor=0.5, patience=patience//2, verbose=True
         )
         
         # 유틸리티 클래스들
-        self.early_stopping = EarlyStopping(patience=patience, verbose=True)
         self.checkpoint = ModelCheckpoint(save_dir, save_best=True)
         self.metrics = MetricsTracker()
+        self.run_name = run_name
     
+    def get_tau(self, epoch):
+        """Exponential Decay Tau Scheduling"""
+        if epoch >= self.num_epochs:
+            return self.tau_end
+        progress = epoch / self.num_epochs
+        return self.tau_start * ((self.tau_end / self.tau_start) ** progress)
+
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """한 에폭 훈련"""
         self.model.train()
         total_loss = 0.0
         total_samples = 0
-        predictions = []
-        targets = []
         
         # Tau 스케줄링 (에폭마다 감소)
-        current_tau = self.tau_start * ((self.tau_end / self.tau_start) ** (epoch / self.num_epochs))
-        self.model.set_tau(current_tau)
+        current_tau = self.get_tau(epoch)
+        if hasattr(self.model, 'set_tau'):
+            self.model.set_tau(current_tau)
         
-        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.num_epochs} (tau={current_tau:.4f})")
+        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.num_epochs} (tau={current_tau:.4f})", leave=False)
         
         for batch_idx, (imgs, labels) in enumerate(pbar):
             imgs = imgs.to(device)
             labels = labels.to(device)
-            
-            # 이진화 전처리 (LogicNet은 0/1 입력을 선호)
-            # DVS 데이터가 실수라면 threshold 처리
-            if imgs.max() > 1.0 or imgs.min() < 0.0:
-                # 정규화 또는 이진화
-                imgs = (imgs > imgs.mean()).float()
             
             # Forward pass
             self.optimizer.zero_grad()
@@ -129,6 +149,10 @@ class LogicDVSTrainer:
             
             # Backward pass
             loss.backward()
+            
+            # Gradient Clipping
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            
             self.optimizer.step()
             
             # 통계 업데이트
@@ -136,23 +160,14 @@ class LogicDVSTrainer:
             total_loss += loss.item() * batch_size
             total_samples += batch_size
             
-            predictions.extend(outputs.detach().cpu().numpy())
-            targets.extend(labels.detach().cpu().numpy())
-            
             # 진행률 업데이트
-            pbar.set_postfix({'loss': loss.item()})
+            pbar.set_postfix({'loss': f"{loss.item():.6f}"})
         
         # 에폭 통계 계산
         avg_loss = total_loss / total_samples
-        predictions_array = np.array(predictions)
-        targets_array = np.array(targets)
-        
-        # MAE 계산 (픽셀 단위로 변환 필요 시)
-        mae = np.mean(np.abs(predictions_array - targets_array))
         
         return {
             'loss': avg_loss,
-            'mae': mae,
             'tau': current_tau
         }
     
@@ -165,13 +180,9 @@ class LogicDVSTrainer:
         targets = []
         
         with torch.no_grad():
-            for imgs, labels in tqdm(self.val_loader, desc="Validation"):
+            for imgs, labels in self.val_loader:
                 imgs = imgs.to(device)
                 labels = labels.to(device)
-                
-                # 이진화 전처리
-                if imgs.max() > 1.0 or imgs.min() < 0.0:
-                    imgs = (imgs > imgs.mean()).float()
                 
                 outputs = self.model(imgs)
                 loss = self.criterion(outputs, labels)
@@ -187,11 +198,18 @@ class LogicDVSTrainer:
         predictions_array = np.array(predictions)
         targets_array = np.array(targets)
         
-        # MAE 및 정확도 계산
+        # MAE 및 Pixel Error 계산
+        # targets가 정규화된 값(0~1)이라고 가정하고 512x512 픽셀 기준으로 변환
         mae = np.mean(np.abs(predictions_array - targets_array))
-        pixel_errors = np.sqrt(np.sum((predictions_array - targets_array)**2, axis=1))
-        accuracy_5px = np.mean(pixel_errors <= 0.05) * 100  # 0.05는 정규화된 좌표 기준
-        accuracy_10px = np.mean(pixel_errors <= 0.10) * 100
+        
+        # 픽셀 에러 (H, W가 512이라고 가정, 실제 데이터셋에 맞게 수정 필요)
+        H, W = 512, 512 
+        pred_px = predictions_array * [W, H]
+        target_px = targets_array * [W, H]
+        pixel_errors = np.sqrt(np.sum((pred_px - target_px)**2, axis=1))
+        
+        accuracy_5px = np.mean(pixel_errors <= 5.0) * 100
+        accuracy_10px = np.mean(pixel_errors <= 10.0) * 100
         
         return {
             'loss': avg_loss,
@@ -212,11 +230,10 @@ class LogicDVSTrainer:
         print(f"   Learning rate: {self.lr}")
         print("=" * 70)
         
+        start_total_time = time.time()
+        
         for epoch in range(self.num_epochs):
-            start_time = time.time()
-            
-            print(f"\n📈 Epoch {epoch+1}/{self.num_epochs}")
-            print("-" * 50)
+            epoch_start_time = time.time()
             
             # 훈련
             train_metrics = self.train_epoch(epoch)
@@ -227,227 +244,223 @@ class LogicDVSTrainer:
             # Learning rate 스케줄러 업데이트
             self.scheduler.step(val_metrics['loss'])
             
-            # 메트릭 기록
-            self.metrics.update(epoch, train_metrics, val_metrics)
+            # 메트릭 기록 (utils.MetricTracker 사용)
+            # 여기서는 편의상 dictionary 합쳐서 전달
+            train_metrics['lr'] = self.optimizer.param_groups[0]['lr']
             
-            # 경과 시간 계산
-            epoch_time = time.time() - start_time
+            # 인자를 2개로 나누어서 전달
+            self.metrics.update(epoch,train_metrics, val_metrics)
+            
+            # 경과 시간
+            epoch_time = time.time() - epoch_start_time
             
             # 결과 출력
-            print(f"   Train Loss: {train_metrics['loss']:.6f}, MAE: {train_metrics['mae']:.6f}")
-            print(f"   Val Loss: {val_metrics['loss']:.6f}, MAE: {val_metrics['mae']:.6f}")
-            print(f"   Val Acc@5px: {val_metrics['accuracy_5px']:.1f}%, Acc@10px: {val_metrics['accuracy_10px']:.1f}%")
-            print(f"   Pixel Error: {val_metrics['pixel_error_mean']:.4f}±{val_metrics['pixel_error_std']:.4f}")
-            print(f"   Time: {epoch_time:.1f}s, LR: {self.optimizer.param_groups[0]['lr']:.2e}, Tau: {train_metrics['tau']:.4f}")
+            print(f"Epoch {epoch+1:03d} | Time: {epoch_time:.1f}s | Tau: {train_metrics['tau']:.4f} | LR: {train_metrics['lr']:.1e}")
+            print(f"   Train Loss: {train_metrics['loss']:.6f}")
+            print(f"   Val Loss: {val_metrics['loss']:.6f} | MAE: {val_metrics['mae']:.6f} | Err: {val_metrics['pixel_error_mean']:.2f}px")
+            print(f"   Acc@5px: {val_metrics['accuracy_5px']:.1f}%")
             
             # 체크포인트 저장
             is_best = self.checkpoint.save(
                 self.model, self.optimizer, epoch, val_metrics['loss'],
-                filename=f"logic_dvs_epoch_{epoch+1}.pth"
+                filename=f"{self.run_name}_{epoch+1}.pth"
             )
             
             if is_best:
                 print("   ⭐ New best model saved!")
-            
-            # Early stopping 체크
-            if self.early_stopping(val_metrics['loss']):
-                print(f"\n⏹️ Early stopping at epoch {epoch+1}")
-                break
+                # Best model일 때만 예측 시각화 저장 (선택 사항)
+                # self.visualize_final_predictions(val_metrics, suffix=f"_epoch_{epoch+1}")
         
-        # 훈련 완료
-        print(f"\n✅ Training completed!")
+        total_time = time.time() - start_total_time
+        print(f"\n✅ Training completed in {total_time/60:.1f} minutes!")
         print(f"   Best validation loss: {self.checkpoint.best_metric:.6f}")
         
-        # 최종 결과 시각화
+        # 최종 결과 처리
         self._finalize_training()
     
     def _finalize_training(self):
         """훈련 완료 후 최종 처리"""
         # 메트릭 히스토리 저장
-        metrics_file = os.path.join(self.save_dir, 'metrics_history.json')
+        metrics_file = os.path.join(self.result_dir, 'metrics_history.json')
         self.metrics.save_history(metrics_file)
         print(f"📊 Metrics history saved to {metrics_file}")
         
         # 훈련 곡선 그리기
         self.plot_training_curves()
         
-        # 최고 모델 로드하여 최종 검증
-        best_model_path = os.path.join(self.save_dir, 'logic_dvs_best.pth')
+        # 최고 모델 로드하여 최종 검증 및 시각화
+        best_model_path = os.path.join(self.save_dir, 'best_model.pth') # ModelCheckpoint 기본 이름 가정
+        if not os.path.exists(best_model_path):
+             # 파일명이 다를 수 있으니 디렉토리에서 가장 최근 best 찾거나 고정 이름 사용
+             best_model_path = os.path.join(self.save_dir, 'logic_dvs_best.pth') # 우리가 저장한 이름
+
         if os.path.exists(best_model_path):
-            print(f"\n🔄 Loading best model for final evaluation...")
-            checkpoint = torch.load(best_model_path, map_location=device, weights_only=False)
-            self.model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"\n🔄 Loading best model for final visualization...")
+            checkpoint = torch.load(best_model_path, map_location=device)
+            if 'model_state_dict' in checkpoint:
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+            else:
+                self.model.load_state_dict(checkpoint)
+                
             self.model.to(device)
             
             final_metrics = self.validate_epoch()
-            print(f"🎯 Final Results:")
-            print(f"   Val Loss: {final_metrics['loss']:.6f}")
-            print(f"   Val MAE: {final_metrics['mae']:.6f}")
-            print(f"   Val Acc@5px: {final_metrics['accuracy_5px']:.1f}%")
-            print(f"   Val Acc@10px: {final_metrics['accuracy_10px']:.1f}%")
-            
-            # 예측 시각화
             self.visualize_final_predictions(final_metrics)
     
     def plot_training_curves(self):
         """훈련 곡선 그래프"""
-        history = self.metrics.get_history()
+        history = self.metrics.get_history() # returns dict of list
+        if not history: return
+
+        epochs = range(1, len(history['train_loss']) + 1)
         
-        if not history or not history.get('train_loss'):
-            print("   ⚠️ No training history available for plotting")
-            return
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
         
-        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        # 1. Loss
+        axes[0,0].plot(epochs, history['train_loss'], label='Train')
+        if 'val_loss' in history:
+            axes[0,0].plot(epochs, history['val_loss'], label='Validation')
+        axes[0,0].set_title('MSE Loss')
+        axes[0,0].set_xlabel('Epoch'); axes[0,0].set_ylabel('Loss')
+        axes[0,0].legend(); axes[0,0].grid(True)
         
-        # Loss
-        if 'train_loss' in history and 'val_loss' in history:
-            axes[0,0].plot(history['train_loss'], label='Train')
-            axes[0,0].plot(history['val_loss'], label='Validation')
-            axes[0,0].set_title('Loss')
-            axes[0,0].set_xlabel('Epoch')
-            axes[0,0].set_ylabel('MSE Loss')
-            axes[0,0].legend()
-            axes[0,0].grid(True)
+        # 2. Pixel Error
+        if 'val_pixel_error_mean' in history:
+            axes[0,1].plot(epochs, history['val_pixel_error_mean'], label='Val Pixel Error', color='orange')
+            axes[0,1].set_title('Mean Pixel Error')
+            axes[0,1].set_xlabel('Epoch'); axes[0,1].set_ylabel('Error (px)')
+            axes[0,1].legend(); axes[0,1].grid(True)
+            
+        # 3. Accuracy
+        if 'val_accuracy_5px' in history:
+            axes[1,0].plot(epochs, history['val_accuracy_5px'], label='Acc@5px')
+        if 'val_accuracy_10px' in history:
+            axes[1,0].plot(epochs, history['val_accuracy_10px'], label='Acc@10px')
+        axes[1,0].set_title('Validation Accuracy')
+        axes[1,0].set_xlabel('Epoch'); axes[1,0].set_ylabel('Accuracy (%)')
+        axes[1,0].legend(); axes[1,0].grid(True)
         
-        # MAE
-        if 'train_mae' in history and 'val_mae' in history:
-            axes[0,1].plot(history['train_mae'], label='Train')
-            axes[0,1].plot(history['val_mae'], label='Validation')
-            axes[0,1].set_title('Mean Absolute Error')
-            axes[0,1].set_xlabel('Epoch')
-            axes[0,1].set_ylabel('MAE')
-            axes[0,1].legend()
-            axes[0,1].grid(True)
-        
-        # Accuracy
-        if 'val_accuracy_5px' in history and 'val_accuracy_10px' in history:
-            axes[1,0].plot(history['val_accuracy_5px'], label='5px threshold')
-            axes[1,0].plot(history['val_accuracy_10px'], label='10px threshold')
-            axes[1,0].set_title('Validation Accuracy')
-            axes[1,0].set_xlabel('Epoch')
-            axes[1,0].set_ylabel('Accuracy (%)')
-            axes[1,0].legend()
-            axes[1,0].grid(True)
-        
-        # Tau 스케줄링
+        # 4. Tau & LR
+        ax4 = axes[1,1]
         if 'train_tau' in history:
-            axes[1,1].plot(history['train_tau'], label='Tau')
-            axes[1,1].set_title('Temperature (Tau) Schedule')
-            axes[1,1].set_xlabel('Epoch')
-            axes[1,1].set_ylabel('Tau')
-            axes[1,1].legend()
-            axes[1,1].grid(True)
+            lns1 = ax4.plot(epochs, history['train_tau'], label='Tau', color='green')
+            ax4.set_ylabel('Tau', color='green')
+            ax4.tick_params(axis='y', labelcolor='green')
         
-        plt.suptitle('LogicDVSNet Training Curves')
+        if 'lr' in history:
+            ax4_r = ax4.twinx()
+            lns2 = ax4_r.plot(epochs, history['lr'], label='LR', color='red', linestyle='--')
+            ax4_r.set_ylabel('Learning Rate', color='red')
+            ax4_r.tick_params(axis='y', labelcolor='red')
+            ax4_r.set_yscale('log')
+        
+        axes[1,1].set_title('Parameters Schedule')
+        axes[1,1].set_xlabel('Epoch')
+        axes[1,1].grid(True)
+        
+        plt.suptitle('LogicDVSNet Training Results', fontsize=16)
         plt.tight_layout()
         
-        plot_path = os.path.join(self.result_dir, 'logic_dvs_training_curves.png')
-        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plot_path = os.path.join(self.result_dir, '{self.run_name}_curves.png')
+        plt.savefig(plot_path, dpi=300)
         print(f"📈 Training curves saved to {plot_path}")
         plt.close()
     
-    def visualize_final_predictions(self, metrics: Dict):
-        """최종 예측 결과 시각화"""
+    def visualize_final_predictions(self, metrics: Dict, suffix=''):
+        """최종 예측 결과 시각화 (Scatter Plot & Sample Images)"""
         try:
             print(f"\n🎨 Creating prediction visualization...")
             
             predictions = np.array(metrics['predictions'])
             targets = np.array(metrics['targets'])
             
-            save_path = os.path.join(self.result_dir, 'logic_dvs_predictions.png')
-            visualize_predictions(predictions, targets, 
-                                 title="LogicDVSNet Predictions",
-                                 save_path=save_path, show_plot=False)
+            # 1. Scatter Plot (GT vs Pred)
+            plt.figure(figsize=(8, 8))
+            plt.scatter(targets[:, 0], predictions[:, 0], alpha=0.5, label='X coord', s=10)
+            plt.scatter(targets[:, 1], predictions[:, 1], alpha=0.5, label='Y coord', s=10)
+            plt.plot([0, 1], [0, 1], 'r--', label='Ideal')
+            plt.xlabel('Ground Truth')
+            plt.ylabel('Prediction')
+            plt.title('Prediction vs Ground Truth')
+            plt.legend()
+            plt.grid(True)
+            plt.axis('equal')
             
-            print(f"   ✅ Prediction visualization saved successfully!")
+            scatter_path = os.path.join(self.result_dir, f'{self.run_name}_scatter.png')
+            plt.savefig(scatter_path)
+            plt.close()
+            
+            # 2. utils.visualize_predictions 사용 (이미지 위에 점 찍기)
+            # 만약 utils에 해당 함수가 이미지까지 처리한다면 호출
+            # 여기서는 간단히 경로만 지정해서 호출
+            save_path = os.path.join(self.result_dir, f'{self.run_name}_predictions.png')
+            visualize_predictions(predictions, targets, title="LogicDVSNet Samples", save_path=save_path, show_plot=False)
+            
+            print(f"   ✅ Visualization saved: {scatter_path}, {save_path}")
             
         except Exception as e:
-            print(f"   ❌ Error in visualize_final_predictions: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"   ❌ Error in visualization: {e}")
 
 
-def train_model(
-    train_loader,
-    val_loader,
-    input_channels: int = 1,
-    num_neurons: int = 64,
-    output_dim: int = 2,
-    lr: float = 0.01,
-    tau_start: float = 1.0,
-    tau_end: float = 0.1,
-    num_epochs: int = 100,
-    save_dir: str = 'checkpoints',
-    **kwargs
-):
-    """
-    모델 훈련 함수
+def main():
+    # --- 설정 ---
+    BATCH_SIZE = 4
+    INPUT_CHANNELS = 5
+    NUM_NEURONS = 32
+    NUM_EPOCHS = 100
+    LR = 0.01
+    MAX_FRAMES = 2000
     
-    Args:
-        train_loader: 훈련 데이터로더
-        val_loader: 검증 데이터로더
-        input_channels: 입력 채널 수
-        num_neurons: 기본 뉴런 수
-        output_dim: 출력 차원
-        lr: 학습률
-        tau_start: 초기 tau 값
-        tau_end: 최종 tau 값
-        num_epochs: 에폭 수
-        save_dir: 체크포인트 저장 디렉토리
-        **kwargs: 추가 파라미터
-    """
-    # 모델 생성
+    BIN_FILE = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
+    CSV_LABEL = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
+    
+    
+    print("🎯 LogicDVSNet Training Start")
+    print("=" * 60)
+    
+    # 1. 데이터셋 로드
+    try:
+        if not os.path.exists(BIN_FILE) or not os.path.exists(CSV_LABEL):
+            raise FileNotFoundError(f"Dataset file not found: {BIN_FILE}, {CSV_LABEL}")
+        
+        individual_frames = load_individual_frames_from_bin(BIN_FILE, MAX_FRAMES)
+        train_loader, val_loader = create_train_val_loaders(
+            individual_frames=individual_frames,
+            csv_labels_path=CSV_LABEL,
+            train_ratio=0.8,
+            batch_size=BATCH_SIZE,
+            num_workers=4,
+            temporal_window=INPUT_CHANNELS,
+            roi_size=(512, 512)
+        )
+
+        
+    except Exception as e:
+        print(f"❌ Dataset load failed: {e}")
+        return
+
+    # 2. 모델 생성
     model = get_model(
-        input_channels=input_channels,
-        num_neurons=num_neurons,
-        output_dim=output_dim,
-        **kwargs
+        input_channels=INPUT_CHANNELS,
+        num_neurons=NUM_NEURONS,
+        output_dim=2,
+        tau=1.0 # 초기값
     )
     
-    # 모델 정보 출력
-    info = model.get_model_info()
-    print(f"\n📊 Model Info:")
-    for key, value in info.items():
-        print(f"   {key}: {value}")
-    
-    # 트레이너 생성 및 훈련
+    # 3. Trainer 실행
     trainer = LogicDVSTrainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        lr=lr,
-        tau_start=tau_start,
-        tau_end=tau_end,
-        num_epochs=num_epochs,
-        save_dir=save_dir
+        lr=LR,
+        tau_start=10.0,
+        tau_end=0.01,
+        num_epochs=NUM_EPOCHS,
+        save_dir='checkpoints',
+        result_dir='result'
     )
     
     trainer.train()
-    
-    return trainer
-
 
 if __name__ == "__main__":
-    # 예제 사용법
-    print("🎯 LogicDVSNet Training Example")
-    print("=" * 60)
-    
-    # 데이터셋 설정 (실제 데이터셋으로 교체 필요)
-    # train_loader, val_loader = create_train_val_loaders(...)
-    
-    # 훈련 실행
-    # trainer = train_model(
-    #     train_loader=train_loader,
-    #     val_loader=val_loader,
-    #     input_channels=1,
-    #     num_neurons=32,
-    #     output_dim=2,
-    #     lr=0.01,
-    #     tau_start=1.0,
-    #     tau_end=0.1,
-    #     num_epochs=100
-    # )
-    
-    print("\n✅ Training script ready!")
-    print("   Please configure your dataset and run training.")
-
+    main()
