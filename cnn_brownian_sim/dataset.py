@@ -173,26 +173,15 @@ def create_train_val_loaders(
     if dataset_size == 0:
         raise ValueError(f"❌ Dataset is empty! No valid samples from {len(individual_frames)} frames.")
     
-    # 훈련/검증 분할
-    if dataset_size < 2:
-        print(f"   ⚠️ Very small dataset ({dataset_size} samples), using full dataset for both train/val")
-        train_size = dataset_size
-        val_size = 0
-        train_dataset = full_dataset
-        val_dataset = full_dataset
-    else:
-        train_size = max(1, int(train_ratio * dataset_size))
-        val_size = dataset_size - train_size
-        
-        train_dataset, val_dataset = torch.utils.data.random_split(
-            full_dataset, [train_size, val_size]
-        )
+    train_size = int(train_ratio * dataset_size)
+    val_size = dataset_size - train_size
     
-    # 훈련 모드 설정
-    if hasattr(train_dataset, 'dataset'):
-        train_dataset.dataset.set_training_mode(True)
-    else:
-        train_dataset.set_training_mode(True)
+    indices = list(range(dataset_size))
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:]
+    
+    train_dataset = torch.utils.data.Subset(full_dataset, train_indices)
+    val_dataset = torch.utils.data.Subset(full_dataset, val_indices)
         
     train_loader = DataLoader(
         train_dataset,

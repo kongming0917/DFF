@@ -71,6 +71,7 @@ class MobileOneS0(nn.Module):
         
         # 4. Sigmoid 추가
         self.sigmoid = nn.Sigmoid()
+        self.hsigmoid = nn.Hardsigmoid()
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.quant(x)
@@ -78,8 +79,9 @@ class MobileOneS0(nn.Module):
         x = self.backbone(x)
         
         x = self.dequant(x)
-        # Sigmoid로 0-1 범위 제한 (dataset에서 이미 정규화 됨)
-        return self.sigmoid(x)
+        # Sigmoid로 0-1 범위 제한 
+        #return self.sigmoid(x)
+        return self.hsigmoid(x)
     
     def reparameterize(self):
         """모든 MobileOneBlock을 single-branch로 변환 (추론 최적화)"""
@@ -147,6 +149,36 @@ def fuse_mobilenetv2_layers(model):
     print("✅ MobileNetV2 layers fused (Conv+BN+ReLU)")
     return model
 
+class PowerOfTwoObserver(MovingAverageMinMaxObserver):
+    """ Scale 값을 2의 거듭제곱으로 강제함 (Activation용)"""
+    def calculate_qparams(self):
+        # 1. 기존 방식대로 min/max 기반 scale 계산
+        scale, zero_point = super().calculate_qparams()
+        
+        # 2. Scale을 가장 가까운 2의 n승으로 변환 (PoT)
+        # log2(scale) -> 반올림 -> 2^round(...)
+        scale_log2 = torch.log2(scale)
+        scale_pot = torch.pow(2, torch.round(scale_log2))
+        
+        # 3. Shift 연산만을 위해 Zero Point는 무조건 0으로 강제 (Symmetric)
+        zero_point = torch.zeros_like(zero_point)
+        
+        return scale_pot, zero_point
+
+class PowerOfTwoPerChannelObserver(PerChannelMinMaxObserver):
+    """ Scale 값을 2의 거듭제곱으로 강제함 (Weight용)"""
+    def calculate_qparams(self):
+        scale, zero_point = super().calculate_qparams()
+        
+        # Scale -> PoT 변환
+        scale_log2 = torch.log2(scale)
+        scale_pot = torch.pow(2, torch.round(scale_log2))
+        
+        # Zero Point -> 0 강제
+        zero_point = torch.zeros_like(zero_point)
+        
+        return scale_pot, zero_point
+
 
 def prepare_qat_model(model: nn.Module) -> nn.Module:
     """모델을 QAT(Quantization Aware Training) 모델로 변환 - int8 양자화 (모든 레이어 per-channel)
@@ -173,16 +205,24 @@ def prepare_qat_model(model: nn.Module) -> nn.Module:
 
         # 1. Activation Observer (공통)
         act_observer = FakeQuantize.with_args(
-            observer = MovingAverageMinMaxObserver,
+            observer = PowerOfTwoObserver,
             dtype=torch.quint8,
             qscheme=torch.per_tensor_affine,
             reduce_range=True,
             quant_min=0, quant_max=255
         )
+        
+        act_observer_symmetric = FakeQuantize.with_args(
+            observer = PowerOfTwoObserver,
+            dtype=torch.qint8,
+            qscheme=torch.per_tensor_symmetric,
+            reduce_range=True,
+            quant_min=-127, quant_max=127
+        )
 
         # 2. Conv2d용 설정 (Per-Channel Symmetric)
         weight_obs_conv = FakeQuantize.with_args(
-            observer = PerChannelMinMaxObserver,
+            observer = PowerOfTwoPerChannelObserver,
             dtype=torch.qint8,
             qscheme=torch.per_channel_symmetric, # Conv는 채널별로!
             quant_min=-127, quant_max=127, eps=2e-5
@@ -191,7 +231,7 @@ def prepare_qat_model(model: nn.Module) -> nn.Module:
         # 3. Linear용 설정 (Per-Tensor Symmetric)
         # Linear는 Per-Channel을 쓰면 error 발생!
         weight_obs_linear = FakeQuantize.with_args(
-            observer = MovingAverageMinMaxObserver,
+            observer = PowerOfTwoObserver,
             dtype=torch.qint8,
             qscheme=torch.per_tensor_symmetric, # Linear는 텐서 통째로!
             quant_min=-127, quant_max=127, eps=2e-5
@@ -199,9 +239,9 @@ def prepare_qat_model(model: nn.Module) -> nn.Module:
         
         qconfig_conv = QConfig(activation=act_observer, weight=weight_obs_conv)
         qconfig_linear = QConfig(activation=act_observer, weight=weight_obs_linear)
-        qconfig_global = QConfig(activation=act_observer, weight=act_observer)
+        qconfig_output = QConfig(activation=act_observer_symmetric, weight=weight_obs_linear)
 
-        model.qconfig = qconfig_global
+        model.qconfig = qconfig_conv
 
         # 4. 레이어 타입별로 다른 설정 주입
         def set_qconfig(module):
@@ -209,16 +249,20 @@ def prepare_qat_model(model: nn.Module) -> nn.Module:
             for child_name, child in module.named_children():
                 if isinstance(child, nn.Conv2d):
                     child.qconfig = qconfig_conv
-                    # print(f"   SET Conv2d qconfig: {child_name}")
                 elif isinstance(child, nn.Linear):
                     child.qconfig = qconfig_linear
-                    # print(f"   SET Linear qconfig: {child_name}")
                 else:
                     # 재귀 호출
                     set_qconfig(child)
         
         set_qconfig(model)
         
+        if hasattr(model, 'backbone') and hasattr(model.backbone, 'linear'):
+            final_layer = model.backbone.linear[-1]
+            
+            if isinstance(final_layer, nn.Linear):
+                final_layer.qconfig = qconfig_output
+                
         # QAT 준비
         model_prepared = prepare_qat(model)
         
@@ -227,13 +271,11 @@ def prepare_qat_model(model: nn.Module) -> nn.Module:
         model_prepared.quant.activation_post_process.observer_enabled[0] = 0
         model_prepared.quant.activation_post_process.fake_quant_enabled[0] = 1
         
-        # Scale: 1.0을 255로 표현하기 위한 스케일
-        scale_val = 1.0 / 255.0
-        model_prepared.quant.activation_post_process.scale = torch.tensor([scale_val])
+        # Scale = 1.0 (입력 1은 실제값 1을 의미)
+        model_prepared.quant.activation_post_process.scale = torch.tensor([1.0])
         
-        # Zero Point: 0.0이 정수 0이 되도록 설정
+        # Zero Point = 0 (입력 0은 실제값 0을 의미)
         model_prepared.quant.activation_post_process.zero_point = torch.tensor([0], dtype=torch.int32)
-        
         
         print("✅ Model prepared for QAT (int8, per-channel for all layers)")
         print("   - Weight: per-channel symmetric quantization")

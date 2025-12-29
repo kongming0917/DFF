@@ -74,7 +74,7 @@ def generate_model_summary(model, input_size=(1, 5, 512, 512), output_dir="fpga_
     """
     print("\n📐 Generating FPGA Architecture Summary...")
     
-    summary_path = os.path.join(output_dir, "model_summary.txt")
+    summary_path = os.path.join(output_dir, "model_summary_2.txt")
     
     # PyTorch Quantized Modules
     import torch.nn.quantized.modules as qmodules
@@ -228,6 +228,7 @@ def extract_weights_and_structure(model, model_name, output_dir="fpga_export"):
     import torch.nn.quantized.modules as qmodules
     
     layer_idx = 0
+    current_input_scale = 1.0
     
     # 모델의 named_modules를 순회하며 정보 추출
     for name, module in model.named_modules():
@@ -267,8 +268,19 @@ def extract_weights_and_structure(model, model_name, output_dir="fpga_export"):
                 w_zps = np.array([weight.q_zero_point()], dtype=np.int32)
                 is_per_channel = False
                 
-            # Bias (FP32)
-            bias_fp32 = bias.detach().numpy().astype(np.float32) if bias is not None else None
+            # Bias (FP32 -> INT32)
+            bias_int32 = None
+            if bias is not None:
+                bias_fp32 = bias.detach().numpy().astype(np.float32)
+                
+                # Bias Scale = Input Scale * Weight Scale
+                # (Broadcasting: scalar * array)
+                bias_scale = current_input_scale * w_scales
+                
+                # Bias Quantization: Round(Bias_fp32 / Bias_scale)
+                # 0으로 나누기 방지 (safety eps)
+                bias_scale = np.maximum(bias_scale, 1e-9)
+                bias_int32 = np.round(bias_fp32 / bias_scale).astype(np.int32)
             
             # 3. Activation Scale/ZeroPoint (Input/Output scale)
             # 보통 Conv/Linear 자체에는 output scale 정보가 scale 속성으로 저장됨
@@ -318,10 +330,11 @@ def extract_weights_and_structure(model, model_name, output_dir="fpga_export"):
                 'out_zp': output_zp         # Scalar (int32)
             }
             
-            if bias_fp32 is not None:
-                layer_data['bias'] = bias_fp32 # [Out] (float32)
+            if bias_int32 is not None:
+                layer_data['bias'] = bias_int32 # [Out] (int32)
                 
             weights_data[name] = layer_data
+            current_input_scale = output_scale
             
         except Exception as e:
             print(f"⚠️ Error extracting {name}: {e}")
@@ -330,7 +343,7 @@ def extract_weights_and_structure(model, model_name, output_dir="fpga_export"):
 
     # 파일 저장
     # 1. 구조 JSON
-    json_path = os.path.join(output_dir, f"{model_name}_structure.json")
+    json_path = os.path.join(output_dir, f"{model_name}_structure_2.json")
     save_compact_json(model_structure, json_path)
     
     # 2. 개별 레이어 데이터 (npz)
@@ -362,7 +375,7 @@ def main():
     model, _, _ = load_int8_model(int8_model_path)
 
     # 2. 추출 및 저장
-    output_dir = "fpga_export_mobileone"
+    output_dir = "model_summary"
     #generate_model_summary(model, (1, 5, 512, 512), output_dir)
     generate_model_summary(model, (1, 5, 720, 960), output_dir)
     extract_weights_and_structure(model, "mobileone_s0", output_dir)

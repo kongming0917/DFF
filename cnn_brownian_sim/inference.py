@@ -45,6 +45,7 @@ class DVSInference:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             print(f"🔧 Using device: {self.device}")
         
+        self.model_name = "unknown"
         # 모델 로드
         self.model, self.input_channels = self._load_model()
         
@@ -54,28 +55,28 @@ class DVSInference:
         checkpoint = torch.load(self.checkpoint_path, map_location=self.device, weights_only=False)
         
         input_channels = checkpoint.get('input_channels', 5)
-        model_name = checkpoint.get('model_name', None)
+        self.model_name = checkpoint.get('model_name', None)
         
-        print(f"🔍 Input channels: {input_channels}, Model name: {model_name}")
+        print(f"🔍 Input channels: {input_channels}, Model name: {self.model_name}")
         
         # 모델 생성 및 로드 (체크포인트 또는 파일명에서 모델 타입 읽기)
         file_name = os.path.basename(self.checkpoint_path)
         
         # 체크포인트에서 model_name 읽기, 없으면 파일명에서 추론
-        model_name = checkpoint.get('model_name', None)
-        if model_name is None:
+        self.model_name = checkpoint.get('model_name', None)
+        if self.model_name is None:
             # 파일명에서 모델 이름 추론
             if 'mobileone' in file_name.lower() or 's0' in file_name.lower():
-                model_name = 'mobileone_s0'
-                print(f"⚠️ [Warning] 'model_name' not found in checkpoint. Inferred from filename: {model_name}")
+                self.model_name = 'mobileone_s0'
+                print(f"⚠️ [Warning] 'model_name' not found in checkpoint. Inferred from filename: {self.model_name}")
             else:
-                model_name = 'mobilenet_v2'
-                print(f"⚠️ [Warning] 'model_name' not found in checkpoint. Using default: {model_name}")
+                self.model_name = 'mobilenet_v2'
+                print(f"⚠️ [Warning] 'model_name' not found in checkpoint. Using default: {self.model_name}")
         else:
-            print(f"🔍 Model name: {model_name} (from checkpoint)")
+            print(f"🔍 Model name: {self.model_name} (from checkpoint)")
         
         # 1. skeleton model (FP32)
-        model = get_model(model_name, input_channels=input_channels, output_dim=2, use_qat=False)
+        model = get_model(self.model_name, input_channels=input_channels, output_dim=2, use_qat=False)
         
         # 2. Check qat mode
         if self.use_quantized:
@@ -122,8 +123,12 @@ class DVSInference:
         
         # numpy 배열로 변환 및 고정 스케일링 (2bit 데이터: 0,1,2 → 0.0,0.5,1.0)
         individual_frames = []
+        
         for frame in frames:
-            frame_array = np.array(frame.raw_data, dtype=np.float32) / 2.0  # 고정 스케일링
+            frame_array = np.array(frame.raw_data, dtype=np.float32)
+            
+            if not ('mobileone' in self.model_name):
+                frame_array = frame_array / 2.0  # 고정 스케일링
             individual_frames.append(frame_array)
         
         print(f"   Loaded {len(individual_frames)} frames")

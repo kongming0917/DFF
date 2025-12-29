@@ -83,12 +83,16 @@ class LogicDVSNet(nn.Module):
         # 최종 Feature Map 크기: (Batch, 32*k, H', W')
         # DVS 입력(128x128) 기준 -> Stage 4 통과 후 (8x8) 예상
         
-        self.gap = nn.AdaptiveAvgPool2d((1, 1))
+        # self.gap = nn.AdaptiveAvgPool2d((1, 1))
         self.flatten = nn.Flatten()
+        final_h = 512 // (2**4)
+        final_w = 512 // (2**4)
+        flat_dim = (32*k) * final_h * final_w
+        
         
         # Classifier 대신 좌표 예측용 Regressor 구성
         self.regressor = nn.Sequential(
-            LogicLayer(32*k, 512, **base_logic_layer_kw),
+            LogicLayer(flat_dim, 512, **base_logic_layer_kw),
             LogicLayer(512, 128, **base_logic_layer_kw),
             # 마지막은 실수 좌표를 출력해야 하므로 RegressionLayer 사용
             RegressionLayer(output_dim) 
@@ -96,7 +100,7 @@ class LogicDVSNet(nn.Module):
 
     def forward(self, x):
         x = self.features(x)
-        x = self.gap(x)
+        # x = self.gap(x)
         x = self.flatten(x)
         x = self.regressor(x)
         return x.view(-1, self.output_dim)

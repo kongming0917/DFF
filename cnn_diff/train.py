@@ -258,7 +258,7 @@ class LogicDVSTrainer:
             print(f"Epoch {epoch+1:03d} | Time: {epoch_time:.1f}s | Tau: {train_metrics['tau']:.4f} | LR: {train_metrics['lr']:.1e}")
             print(f"   Train Loss: {train_metrics['loss']:.6f}")
             print(f"   Val Loss: {val_metrics['loss']:.6f} | MAE: {val_metrics['mae']:.6f} | Err: {val_metrics['pixel_error_mean']:.2f}px")
-            print(f"   Acc@5px: {val_metrics['accuracy_5px']:.1f}%")
+            print(f"   Acc@5px: {val_metrics['accuracy_5px']:.1f}% | Acc@10px: {val_metrics['accuracy_10px']:.1f}%")
             
             # 체크포인트 저장
             is_best = self.checkpoint.save(
@@ -407,9 +407,9 @@ def main():
     BATCH_SIZE = 4
     INPUT_CHANNELS = 5
     NUM_NEURONS = 32
-    NUM_EPOCHS = 100
+    NUM_EPOCHS = 10
     LR = 0.01
-    MAX_FRAMES = 2000
+    MAX_FRAMES = 100
     
     BIN_FILE = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
     CSV_LABEL = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
@@ -453,8 +453,8 @@ def main():
         train_loader=train_loader,
         val_loader=val_loader,
         lr=LR,
-        tau_start=10.0,
-        tau_end=0.01,
+        tau_start=1.0,
+        tau_end=1.0,
         num_epochs=NUM_EPOCHS,
         save_dir='checkpoints',
         result_dir='result'

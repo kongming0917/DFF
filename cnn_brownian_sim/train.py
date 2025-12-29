@@ -576,9 +576,7 @@ def load_individual_frames_from_bin(bin_file_path: str, max_frames: Optional[int
         raise FileNotFoundError(f"Bin file not found: {bin_file_path}")
     
     try:
-        # 실제 DVS bin 파일 로딩
-        # BinProcessor는 모듈 레벨에서 이미 import됨
-        
+        # 실제 DVS bin 파일 로딩       
         # BinProcessor 사용하여 프레임 로드 (Brownian motion: 512x512)
         processor = BinProcessor(512, 512, has_header=True)
         
@@ -591,8 +589,8 @@ def load_individual_frames_from_bin(bin_file_path: str, max_frames: Optional[int
         # 프레임 데이터를 numpy 배열로 변환
         individual_frames = []
         for frame_idx, frame in enumerate(frames_data):
-            # frame.raw_data를 float32로 변환하고 고정 스케일링 (2bit 데이터: 0,1,2 → 0.0,0.5,1.0)
-            frame_array = frame.raw_data.astype(np.float32) / 2.0  # 고정 스케일링
+            # frame.raw_data (2bit 데이터: 0,1,2)
+            frame_array = frame.raw_data.astype(np.float32)
             individual_frames.append(frame_array)
             
             if len(individual_frames) >= max_frames_limit:
