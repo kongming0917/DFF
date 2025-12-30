@@ -11,6 +11,7 @@ import os
 import sys
 import math
 import re
+import argparse
 # 경로 추가
 dvs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if dvs_root not in sys.path:
@@ -65,7 +66,7 @@ def load_int8_model(checkpoint_path: str):
     
     return quantized_model, input_channels, output_dim
 
-def generate_model_summary(model, input_size=(1, 5, 512, 512), output_dir="fpga_export"):
+def generate_model_info(model, input_size=(1, 5, 512, 512), output_dir="fpga_export"):
     """
     FPGA 구현을 위한 상세 모델 구조 요약표 생성
     - 각 레이어의 입출력 Shape 계산
@@ -74,7 +75,7 @@ def generate_model_summary(model, input_size=(1, 5, 512, 512), output_dir="fpga_
     """
     print("\n📐 Generating FPGA Architecture Summary...")
     
-    summary_path = os.path.join(output_dir, "model_summary_2.txt")
+    summary_path = os.path.join(output_dir, "model_info_2.txt")
     
     # PyTorch Quantized Modules
     import torch.nn.quantized.modules as qmodules
@@ -88,7 +89,7 @@ def generate_model_summary(model, input_size=(1, 5, 512, 512), output_dir="fpga_
     header = (
         f"{'ID':<4} | {'Layer Name':<30} | {'Type':<15} | "
         f"{'Input Shape':<15} | {'Output Shape':<15} | "
-        f"{'K/S/P':<10} | {'Out Scale':<12} | {'Params':<8}"
+        f"{'K/S/P':<10} | {'Out Scale (Shift)':<18} | {'Params':<8}"
     )
     separator = "-" * len(header)
     
@@ -157,16 +158,18 @@ def generate_model_summary(model, input_size=(1, 5, 512, 512), output_dir="fpga_
             current_c = module.out_features # Flattened assumed
             
         # 3. Quantization Params
-        out_scale = f"{module.scale:.6f}"
+        scale_val = module.scale
+        # shift 계산: scale = 2^(-shift) -> shift = -log2(scale)
+        shift = round(-math.log2(scale_val)) if scale_val > 0 else 0
+        out_scale = f"{scale_val:.6f} ({shift})"
         
         # 라인 생성
         line = (
             f"{layer_idx:<4} | {name:<30} | {type_str:<15} | "
             f"{in_shape_str:<15} | {out_shape_str:<15} | "
-            f"{k_s_p:<10} | {out_scale:<12} | {num_params:<8}"
+            f"{k_s_p:<10} | {out_scale:<18} | {num_params:<8}"
         )
         lines.append(line)
-        print(line) # 콘솔 출력
         
         # FPGA export용 구조체에 저장
         fpga_layers.append({
@@ -361,9 +364,65 @@ def extract_weights_and_structure(model, model_name, output_dir="fpga_export"):
     
     return model_structure
 
+def save_npz_structure_info(weights_dir, layer_names=None, output_file=None):
+    """
+    레이어들의 npz 파일 구조를 설명하는 txt 파일 생성
+    layer_names가 None이면 weights_dir의 모든 npz 파일을 처리
+    """
+    lines = ["NPZ File Structure Information", "=" * 60, ""]
+    
+    if layer_names is None:
+        # 모든 npz 파일 찾기
+        if not os.path.exists(weights_dir):
+            lines.append("⚠️ layers 디렉토리가 없습니다.")
+            if output_file:
+                with open(output_file, 'w') as f:
+                    f.write('\n'.join(lines))
+            return
+        
+        npz_files = sorted([f for f in os.listdir(weights_dir) if f.endswith('.npz')])
+        if not npz_files:
+            lines.append("⚠️ npz 파일이 없습니다.")
+            if output_file:
+                with open(output_file, 'w') as f:
+                    f.write('\n'.join(lines))
+            return
+        
+        # 파일명에서 레이어 이름 추출 (backbone_linear_1.npz -> backbone_linear_1)
+        layer_names = [f.replace('.npz', '') for f in npz_files]
+    
+    for layer_name in layer_names:
+        safe_name = layer_name.replace('.', '_')
+        npz_path = os.path.join(weights_dir, f"{safe_name}.npz")
+        
+        if not os.path.exists(npz_path):
+            lines.extend([f"⚠️ {safe_name}.npz: File not found", ""])
+            continue
+        
+        data = np.load(npz_path)
+        lines.extend([f"File: {safe_name}.npz", f"  Number of .npy files: {len(data.keys())}", ""])
+        
+        for key in sorted(data.keys()):
+            arr = data[key]
+            shape_str = ' x '.join(map(str, arr.shape)) if arr.shape else 'scalar'
+            precision = str(arr.dtype)
+            lines.extend([f"  {key}.npy:", f"    Dimension: {shape_str}", f"    Precision: {precision}"])
+        
+        lines.append("")
+    
+    if output_file:
+        with open(output_file, 'w') as f:
+            f.write('\n'.join(lines))
+        print(f"💾 NPZ structure info saved to: {output_file}")
+
 def main():
+    parser = argparse.ArgumentParser(description='FPGA 구현을 위한 INT8 모델 정보 추출')
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('-all', action='store_true', help='모든 파일 저장 (layer npz 포함)')
+    group.add_argument('-short', action='store_true', help='txt 파일만 저장 (model_summary, npz_structure_info)')
+    args = parser.parse_args()
+    
     # [설정] 추출할 int8 모델 경로
-    # 반드시 _int8.pth 파일이어야 합니다.
     int8_model_path = "checkpoints_mobileone_s0_qat/mobileone_s0_int8.pth"
     
     if not os.path.exists(int8_model_path):
@@ -374,15 +433,31 @@ def main():
     # 1. 모델 로드 (Single-branch, INT8 구조)
     model, _, _ = load_int8_model(int8_model_path)
 
-    # 2. 추출 및 저장
-    output_dir = "model_summary"
-    #generate_model_summary(model, (1, 5, 512, 512), output_dir)
-    generate_model_summary(model, (1, 5, 720, 960), output_dir)
-    extract_weights_and_structure(model, "mobileone_s0", output_dir)
+    output_dir = "mobileone_info"
+    
+    # 2. 모델 정보 txt 파일 생성 (항상 실행)
+    generate_model_info(model, (1, 5, 720, 960), output_dir)
+    
+    if args.all:
+        # 모든 파일 저장 (npz 포함)
+        extract_weights_and_structure(model, "mobileone_s0", output_dir)
+        
+        # NPZ 구조 정보 저장 (모든 레이어)
+        weights_dir = os.path.join(output_dir, "layers")
+        npz_info_path = os.path.join(output_dir, "npz_structure_info.txt")
+        save_npz_structure_info(weights_dir, layer_names=None, output_file=npz_info_path)
+    elif args.short:
+        # txt 파일만 저장
+        # 기존 npz 파일이 있다면 그 구조 정보만 저장
+        weights_dir = os.path.join(output_dir, "layers")
+        if os.path.exists(weights_dir):
+            npz_info_path = os.path.join(output_dir, "npz_structure_info.txt")
+            save_npz_structure_info(weights_dir, layer_names=None, output_file=npz_info_path)
+        else:
+            print("⚠️ layers 디렉토리가 없습니다. npz_structure_info.txt를 생성할 수 없습니다.")
     
     print("\n✅ Extraction Finished!")
     print("   Now you can use these files for FPGA implementation.")
-    print("   Note: 'bias' is float32. In FPGA, convert it to int32 accumulator scale if needed.")
 
 if __name__ == "__main__":
     main()
