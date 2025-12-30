@@ -18,16 +18,16 @@ logs/
 */logs/
 
 # 결과 폴더 (선택적 - 필요시 주석 해제)
-# results/
-# */results/
-# analysis_results/
-# */analysis_results/
-# csv_results/
-# */csv_results/
-# outputs/
-# */outputs/
-# inference_results/
-# */inference_results/
+results/
+*/results/
+analysis_results/
+*/analysis_results/
+csv_results/
+*/csv_results/
+outputs/
+*/outputs/
+inference_results/
+*/inference_results/
 
 # ===== Python 관련 =====
 # Byte-compiled / optimized / DLL files
@@ -99,9 +99,9 @@ venv.bak/
 *.bin
 
 # 대용량 이미지 (선택적)
-# *.png
-# *.jpg
-# *.jpeg
+*.png
+*.jpg
+*.jpeg
 
 # ===== IDE 관련 =====
 # VSCode
