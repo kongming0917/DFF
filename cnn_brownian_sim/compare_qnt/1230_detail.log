@@ -1,0 +1,28 @@
+
+📊 Comparing 4 models: ['MobileNetV2 (Standard)', 'MobileOne-S0 (Standard)', 'MobileOne-S0 (QAT)', 'MobileOne-S0 (QAT-Tensor)']
+✅ Comparison plot saved to: compare_qnt/1230_graph.png
+
+====================================================================================================
+📊 MODEL COMPARISON SUMMARY
+====================================================================================================
+
+📋 Configuration Parameters:
+----------------------------------------------------------------------------------------------------
+MobileNetV2 (Standard)         | Max Frames: 1000   | Temporal Window: 5   | Valid Samples: 993   
+MobileOne-S0 (Standard)        | Max Frames: 1000   | Temporal Window: 5   | Valid Samples: 993   
+MobileOne-S0 (QAT)             | Max Frames: 1000   | Temporal Window: 5   | Valid Samples: 993   
+MobileOne-S0 (QAT-Tensor)      | Max Frames: 1000   | Temporal Window: 5   | Valid Samples: 993   
+----------------------------------------------------------------------------------------------------
+
+📈 Performance Statistics:
+Model                     Mean Error      Std Error       Median          Max Error       Time(ms)        FPS       
+--------------------------------------------------------------------------------------------------------------------
+MobileNetV2 (Standard)    1.948           1.185           1.741           10.903          3.86            259.1     
+MobileOne-S0 (Standard)   2.413           1.226           2.241           8.470           8.89            112.5     
+MobileOne-S0 (QAT)        33.028          23.885          40.200          70.711          8.85            113.0     
+MobileOne-S0 (QAT-Tensor) 33.719          23.092          40.234          70.711          8.14            122.9     
+====================================================================================================
+
+✅ Comparison completed!
+   Graph saved to: compare_qnt/1230_graph.png
+   Log saved to: compare_qnt/1230_detail.log

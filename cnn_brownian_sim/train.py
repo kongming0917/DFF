@@ -3,12 +3,30 @@
 train.py: DVS 레이저 중심점 탐지 모델 훈련 스크립트
 """
 
+import os
+import sys
+import argparse
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+# -h 옵션을 먼저 체크 (import 오류 전에 도움말을 볼 수 있도록)
+if '-h' in sys.argv or '--help' in sys.argv:
+    import argparse
+    parser = argparse.ArgumentParser(description='DVS 레이저 중심점 탐지 모델 훈련')
+    parser.add_argument('-single', action='store_true', help='단일 프레임 모드 (temporal_window=1)')
+    parser.add_argument('-qat', action='store_true', help='INT8 QAT 모드 (granularity: per-channel)')
+    parser.add_argument('-qat-tensor', action='store_true', help='INT8 QAT per-tensor 모드 (granularity: per-channel)')
+    parser.print_help()
+    sys.exit(0)
+
+# dvs_root 계산 및 sys.path 설정 (모듈 레벨에서 한 번만)
+dvs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if dvs_root not in sys.path:
+    sys.path.insert(0, dvs_root)
+
+# 이제 나머지 import 수행
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
-import os
-import sys
 import time
 import json
 from typing import Dict, List, Tuple, Optional, Any
@@ -18,11 +36,6 @@ import matplotlib
 if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
     matplotlib.use('Agg')  # GUI 없는 환경에서만 Agg 사용
 import matplotlib.pyplot as plt
-
-# dvs_root 계산 및 sys.path 설정 (모듈 레벨에서 한 번만)
-dvs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if dvs_root not in sys.path:
-    sys.path.insert(0, dvs_root)
 
 # 공통 모듈 import
 from lib.bin_processor import BinProcessor
@@ -50,6 +63,7 @@ class DVSBrownianTrainer:
         patience: int = 15,
         save_dir: str = 'checkpoints',
         use_qat: bool = False,  # QAT 모드 (int8 양자화)
+        qat_per_channel: bool = True,  # QAT per-channel 여부 (False면 per-tensor)
     ):
         self.model_name = model_name
         self.individual_frames = individual_frames
@@ -61,6 +75,7 @@ class DVSBrownianTrainer:
         self.num_epochs = num_epochs
         self.save_dir = save_dir
         self.use_qat = use_qat  # QAT 플래그 저장
+        self.qat_per_channel = qat_per_channel  # QAT per-channel 플래그 저장
         # 결과 저장 디렉토리 설정 (PNG 파일용)
         self.result_dir = 'result'
         os.makedirs(self.result_dir, exist_ok=True)
@@ -87,7 +102,8 @@ class DVSBrownianTrainer:
         print(f"📊 Model: {model_name}")
         print(f"   Parameters: {params['total']:,} (trainable: {params['trainable']:,})")
         if use_qat:
-            print(f"   🔢 QAT Mode: Enabled (int8 quantization)")
+            qat_mode = "per-channel" if qat_per_channel else "per-tensor"
+            print(f"   🔢 QAT Mode: Enabled (int8 quantization, {qat_mode})")
         
         # 손실 함수 및 옵티마이저
         self.criterion = nn.MSELoss()
@@ -246,7 +262,7 @@ class DVSBrownianTrainer:
         
         # Best model path
         if self.use_qat:
-            standard_checkpoint_dir = self.save_dir.replace('_qat', '')
+            standard_checkpoint_dir = f"checkpoints_{self.model_name}"
             best_fp32_path = os.path.join(standard_checkpoint_dir, f"{self.model_name}_best.pth")
         else:
             best_fp32_path = os.path.join(self.save_dir, f"{self.model_name}_best.pth")
@@ -338,7 +354,7 @@ class DVSBrownianTrainer:
                 
             # 3. Prepare QAT model
             from model import prepare_qat_model
-            self.model = prepare_qat_model(self.model)             
+            self.model = prepare_qat_model(self.model, per_channel=self.qat_per_channel)             
             self.model.to(self.device)
             
             # 4. Optimizer 및 Scheduler 재설정
@@ -608,7 +624,8 @@ def train_brownian_model(
     bin_file_path: str,
     csv_labels_path: str,
     lr: Optional[float] = None,
-    use_qat: bool = False  # QAT 옵션 추가
+    use_qat: bool = False,  # QAT 옵션 추가
+    qat_per_channel: bool = True  # QAT per-channel 여부
 ):
     """Brownian Motion 방식으로 모델 훈련 (CSV 레이블 사용)
     
@@ -618,6 +635,7 @@ def train_brownian_model(
         csv_labels_path: CSV 레이블 파일 경로
         lr: 학습률 (옵션)
         use_qat: QAT 모드 사용 여부 (int8 양자화)
+        qat_per_channel: QAT per-channel 여부 (False면 per-tensor)
     """
     
     # 기본값 설정
@@ -632,7 +650,10 @@ def train_brownian_model(
     
     # QAT 모드인 경우 체크포인트 디렉토리 이름에 표시
     if use_qat:
-        full_config['save_dir'] = f"checkpoints_{config['model_name']}_qat"
+        if qat_per_channel:
+            full_config['save_dir'] = f"checkpoints_{config['model_name']}_qat"
+        else:
+            full_config['save_dir'] = f"checkpoints_{config['model_name']}_qat_tensor"
     
     # 개별 프레임 로드
     individual_frames = load_individual_frames_from_bin(
@@ -668,6 +689,7 @@ def train_brownian_model(
         save_dir=full_config['save_dir'],
         temporal_window=full_config['temporal_window'],
         use_qat=use_qat,  # QAT 옵션 추가
+        qat_per_channel=qat_per_channel,  # QAT per-channel 옵션 추가
     )
     
     # 데이터셋 파라미터 (필요 없음, CSV에서 로드)
@@ -679,103 +701,90 @@ def train_brownian_model(
 
 
 if __name__ == "__main__":
-    # Brownian Motion 데이터셋으로 학습
-    print("🎯 Brownian Motion DVS 데이터로 학습")
-    print("=" * 60)
+    parser = argparse.ArgumentParser(description='DVS 레이저 중심점 탐지 모델 훈련')
+    parser.add_argument('-single', action='store_true', help='단일 프레임 모드 (temporal_window=1)')
+    parser.add_argument('-qat', action='store_true', help='QAT 모드 (int8 양자화, 기본: per-channel)')
+    parser.add_argument('-qat-tensor', action='store_true', help='QAT per-tensor 모드 (기본은 per-channel)')
+    args = parser.parse_args()
     
     # Brownian Motion 데이터셋 파일 경로
     BIN_FILE_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
     CSV_LABELS_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
-    
-    # 학습 하이퍼파라미터 설정
-    LEARNING_RATE = 0.001  # 학습률
-    # QAT 여부는 config.py의 설정에서 자동으로 결정됨
+    LEARNING_RATE = 0.001
     
     # 파일 존재 확인
     if not os.path.exists(BIN_FILE_PATH):
         print(f"❌ DVS 데이터 파일을 찾을 수 없습니다: {BIN_FILE_PATH}")
-        print("   Brownian motion 데이터셋을 먼저 생성해주세요: python generate_brownian_dataset.py")
         exit(1)
-    else:
-        print(f"✅ DVS 데이터 파일 확인: {BIN_FILE_PATH}")
-    
     if not os.path.exists(CSV_LABELS_PATH):
         print(f"❌ CSV 레이블 파일을 찾을 수 없습니다: {CSV_LABELS_PATH}")
-        print("   Brownian motion 데이터셋을 먼저 생성해주세요: python generate_brownian_dataset.py")
         exit(1)
-    else:
-        print(f"✅ CSV 레이블 파일 확인: {CSV_LABELS_PATH}")
     
-    # 사용 가능한 학습 설정 목록 가져오기
-    available_configs = get_training_mode_configs()
+    # 모델 선택
+    print("\n📋 모델 선택:")
+    print("  1. mobilenet_v2")
+    print("  2. mobileone_s0")
     
-    # 설정 목록 표시 (모델 이름만)
-    print(f"\n📋 사용 가능한 학습 설정:")
-    print("=" * 60)
-    config_list = list(available_configs.items())
-    for idx, (config_name, config_data) in enumerate(config_list, 1):
-        print(f"  {idx}. {config_name}")
-    
-    # 사용자 선택
     while True:
         try:
-            choice = input(f"\n학습 설정을 선택하세요 (1-{len(config_list)}): ").strip()
-            choice_idx = int(choice) - 1
-            
-            if 0 <= choice_idx < len(config_list):
-                selected_config_name, selected_config = config_list[choice_idx]
+            choice = input("\n모델을 선택하세요 (1-2): ").strip()
+            if choice == '1':
+                base_model = 'mobilenet_v2'
+                break
+            elif choice == '2':
+                base_model = 'mobileone_s0'
                 break
             else:
-                print(f"❌ 잘못된 선택입니다. 1-{len(config_list)} 사이의 숫자를 입력하세요.")
-        except ValueError:
-            print("❌ 숫자를 입력하세요.")
+                print("❌ 1 또는 2를 입력하세요.")
         except KeyboardInterrupt:
-            print("\n⏹️ 사용자가 취소했습니다.")
+            print("\n⏹️ 취소되었습니다.")
             exit(0)
     
-    # 선택된 설정 사용
-    config = selected_config.copy()
-    # QAT 여부는 config에서 가져옴 (config.py의 설정 사용)
-    use_qat = config.get('use_qat', False)
+    # Base config 이름 구성 (QAT tensor/channel 모두 동일한 config 사용)
+    base_config_name = f"{base_model}_single" if args.single else base_model
     
-    print(f"\n✅ 선택된 설정: {selected_config_name}")
+    # 설정 가져오기
+    available_configs = get_training_mode_configs()
+    if base_config_name not in available_configs:
+        print(f"❌ 설정을 찾을 수 없습니다: {base_config_name}")
+        exit(1)
+    config = available_configs[base_config_name].copy()
+    
+    # QAT 모드 확인 및 최종 모델명 구성
+    use_qat = args.qat or args.qat_tensor  # -qat 또는 -qat-tensor 둘 다 QAT 활성화
+    qat_per_channel = not args.qat_tensor
+    
+    model_name = base_config_name
+    if use_qat:
+        model_name = f"{base_config_name}_qat_tensor" if not qat_per_channel else f"{base_config_name}_qat"
+    
+    print(f"\n✅ 선택된 설정: {model_name}")
     print(f"   모델: {config['model_name']}")
-    print(f"   최대 프레임: {config.get('max_frames', 'All') or 'All'}")
     print(f"   시간 윈도우: {config['temporal_window']}")
     print(f"   에폭 수: {config['num_epochs']}")
     print(f"   배치 크기: {config['batch_size']}")
-    print(f"   ROI 크기: {config['roi_size'][0]}×{config['roi_size'][1]}")
     if use_qat:
-        print(f"   🔢 QAT 모드: 활성화 (int8 양자화)")
-    
-    print(f"\n🚀 Brownian Motion 데이터셋으로 학습을 시작합니다...")
+        qat_mode = "per-channel" if qat_per_channel else "per-tensor"
+        print(f"   🔢 QAT 모드: 활성화 (int8 양자화, {qat_mode})")
     
     try:
-        # Brownian Motion 모델 학습 실행
         trainer = train_brownian_model(
             config=config,
             bin_file_path=BIN_FILE_PATH,
             csv_labels_path=CSV_LABELS_PATH,
             lr=LEARNING_RATE,
-            use_qat=use_qat  # config.py의 설정 사용
+            use_qat=use_qat,
+            qat_per_channel=qat_per_channel
         )
         
         print(f"\n✅ {config['model_name']} 모델 학습 완료!")
+        checkpoint_dir = f"checkpoints_{model_name}"
+        print(f"📁 체크포인트 저장 위치: {checkpoint_dir}/")
         if use_qat:
-            print(f"📁 체크포인트 저장 위치: checkpoints_{config['model_name']}_qat/")
-            print(f"🎯 최고 모델: checkpoints_{config['model_name']}_qat/{config['model_name']}_qat_best.pth")
-            print(f"🔢 양자화된 모델 (int8): checkpoints_{config['model_name']}_qat/{config['model_name']}_qat.pth")
-            print(f"📊 훈련 곡선: result/{config['model_name']}_qat_training_curves.png")
-            print(f"🔍 예측 결과: result/{config['model_name']}_qat_predictions.png")
-        else:
-            print(f"📁 체크포인트 저장 위치: checkpoints_{config['model_name']}/")
-            print(f"🎯 최고 모델: checkpoints_{config['model_name']}/{config['model_name']}_best.pth")
-            print(f"📊 훈련 곡선: result/{config['model_name']}_training_curves.png")
-            print(f"🔍 예측 결과: result/{config['model_name']}_predictions.png")
+            print(f"🔢 양자화된 모델 (int8): {checkpoint_dir}/{config['model_name']}_int8.pth")
         
     except KeyboardInterrupt:
         print(f"\n⏹️ 사용자가 학습을 중단했습니다.")
-        
     except Exception as e:
         print(f"\n❌ 학습 중 오류 발생: {e}")
         import traceback

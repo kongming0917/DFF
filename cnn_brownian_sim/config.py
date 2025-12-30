@@ -16,10 +16,10 @@ def get_training_mode_configs() -> Dict[str, Dict[str, Any]]:
     configs = {
         "mobilenet_v2": {
             'model_name': 'mobilenet_v2',
-            'max_frames': 500,
+            'max_frames': 2000,
             'temporal_window': 5,
             'num_epochs': 50,
-            'batch_size': 4,
+            'batch_size': 16,
             'patience': 15,
             'roi_size': (512, 512),
             'description': 'MobileNetV2 기반 학습 (300 frames, temporal=5, epochs=40)'
@@ -36,25 +36,14 @@ def get_training_mode_configs() -> Dict[str, Dict[str, Any]]:
         },
         "mobileone_s0": {
             'model_name': 'mobileone_s0',
-            'max_frames': 1000,
+            'max_frames':2000,
             'temporal_window': 5,
             'num_epochs': 50,
-            'batch_size': 6,
+            'batch_size': 16,
             'patience': 12,
             'roi_size': (512, 512),
             'description': 'MobileOneS0 기반 학습 (300 frames, temporal=5, epochs=40)'
         }
     }
-    
-    # QAT 버전 설정 추가 (int8 양자화)
-    qat_configs = {}
-    for name, config in configs.items():
-        qat_config = config.copy()
-        qat_config['use_qat'] = True
-        qat_config['description'] = config.get('description', '') + ' (QAT int8)'
-        qat_configs[f"{name}_qat"] = qat_config
-    
-    # 기존 설정과 QAT 설정 병합
-    configs.update(qat_configs)
     
     return configs

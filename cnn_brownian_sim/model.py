@@ -180,11 +180,12 @@ class PowerOfTwoPerChannelObserver(PerChannelMinMaxObserver):
         return scale_pot, zero_point
 
 
-def prepare_qat_model(model: nn.Module) -> nn.Module:
-    """모델을 QAT(Quantization Aware Training) 모델로 변환 - int8 양자화 (모든 레이어 per-channel)
+def prepare_qat_model(model: nn.Module, per_channel: bool = True) -> nn.Module:
+    """모델을 QAT(Quantization Aware Training) 모델로 변환 - int8 양자화
     
     Args:
         model: 원본 모델
+        per_channel: True면 per-channel, False면 per-tensor 양자화
         
     Returns:
         QAT 준비된 모델
@@ -192,7 +193,8 @@ def prepare_qat_model(model: nn.Module) -> nn.Module:
     try:
         torch.backends.quantized.engine = 'fbgemm'
         
-        print("🔢 Preparing model for QAT (int8 quantization, per-channel for all layers)...")
+        qat_mode = "per-channel" if per_channel else "per-tensor"
+        print(f"🔢 Preparing model for QAT (int8 quantization, {qat_mode} for Conv layers)...")
         
         # 모델을 학습 모드로 설정 (QAT는 학습 모드에서만 작동)
         model.train()
@@ -220,13 +222,23 @@ def prepare_qat_model(model: nn.Module) -> nn.Module:
             quant_min=-127, quant_max=127
         )
 
-        # 2. Conv2d용 설정 (Per-Channel Symmetric)
-        weight_obs_conv = FakeQuantize.with_args(
-            observer = PowerOfTwoPerChannelObserver,
-            dtype=torch.qint8,
-            qscheme=torch.per_channel_symmetric, # Conv는 채널별로!
-            quant_min=-127, quant_max=127, eps=2e-5
-        )
+        # 2. Conv2d용 설정 (Per-Channel 또는 Per-Tensor)
+        if per_channel:
+            # [기존] Per-Channel
+            weight_obs_conv = FakeQuantize.with_args(
+                observer = PowerOfTwoPerChannelObserver,
+                dtype=torch.qint8,
+                qscheme=torch.per_channel_symmetric,
+                quant_min=-127, quant_max=127, eps=2e-5
+            )
+        else:
+            # [수정 후] Per-Tensor
+            weight_obs_conv = FakeQuantize.with_args(
+                observer = PowerOfTwoObserver,
+                dtype=torch.qint8,
+                qscheme=torch.per_tensor_symmetric,
+                quant_min=-127, quant_max=127, eps=2e-5
+            )
 
         # 3. Linear용 설정 (Per-Tensor Symmetric)
         # Linear는 Per-Channel을 쓰면 error 발생!
@@ -277,8 +289,9 @@ def prepare_qat_model(model: nn.Module) -> nn.Module:
         # Zero Point = 0 (입력 0은 실제값 0을 의미)
         model_prepared.quant.activation_post_process.zero_point = torch.tensor([0], dtype=torch.int32)
         
-        print("✅ Model prepared for QAT (int8, per-channel for all layers)")
-        print("   - Weight: per-channel symmetric quantization")
+        weight_mode = "per-channel" if per_channel else "per-tensor"
+        print(f"✅ Model prepared for QAT (int8, {qat_mode} for Conv layers)")
+        print(f"   - Weight: {weight_mode} symmetric quantization")
         print("   - Activation: per-tensor quantization")
         return model_prepared
         

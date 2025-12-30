@@ -15,6 +15,7 @@ import os
 import sys
 from typing import Dict, Tuple, Optional, List
 import matplotlib
+from datetime import datetime
 # GUI 환경 확인 후 백엔드 설정
 if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
     matplotlib.use('Agg')  # GUI 없는 환경에서만 Agg 사용
@@ -92,7 +93,14 @@ def load_model_predictions(
     mean_error = np.mean(pixel_errors)
     std_error = np.std(pixel_errors)
     
-    print(f"✅ {model_name} predictions loaded: {len(predictions)} samples")
+    # 모델 정보 추출 (inferencer에서)
+    temporal_window = inferencer.input_channels
+    valid_samples = len(predictions)
+    
+    print(f"✅ {model_name} predictions loaded")
+    print(f"   Max frames: {max_frames}")
+    print(f"   Temporal window: {temporal_window}")
+    print(f"   Valid samples: {valid_samples}")
     print(f"   Mean error: {mean_error:.2f}±{std_error:.2f} px")
     print(f"   Mean inference time: {results.get('mean_time', 0):.2f} ms")
     print(f"   FPS: {results.get('fps', 0):.1f}")
@@ -105,7 +113,10 @@ def load_model_predictions(
         'std_error': std_error,
         'mean_time': results.get('mean_time', 0),
         'fps': results.get('fps', 0),
-        'method': model_name
+        'method': model_name,
+        'max_frames': max_frames,
+        'temporal_window': temporal_window,
+        'valid_samples': valid_samples
     }
 
 
@@ -267,6 +278,19 @@ def compare_multiple_models(results: Dict[str, Dict], save_path: Optional[str] =
     print("\n" + "="*100)
     print("📊 MODEL COMPARISON SUMMARY")
     print("="*100)
+    
+    # 파라미터 정보 출력
+    print("\n📋 Configuration Parameters:")
+    print("-" * 100)
+    for name in model_names:
+        res = results[name]
+        print(f"{name:<30} | Max Frames: {res.get('max_frames', 'N/A'):<6} | "
+              f"Temporal Window: {res.get('temporal_window', 'N/A'):<3} | "
+              f"Valid Samples: {res.get('valid_samples', 'N/A'):<6}")
+    print("-" * 100)
+    
+    # 성능 통계 출력
+    print("\n📈 Performance Statistics:")
     header = f"{'Model':<25} {'Mean Error':<15} {'Std Error':<15} {'Median':<15} {'Max Error':<15} {'Time(ms)':<15} {'FPS':<10}"
     print(header)
     print("-" * len(header))
@@ -291,8 +315,17 @@ def create_statistics_table(results: Dict[str, Dict], save_path: Optional[str] =
     ax.axis('off')
     
     # 통계 데이터 생성
+    # 파라미터 정보 행 추가
+    stats_data = [
+        ['Parameter'] + model_names,
+        ['Max Frames'] + [f"{results[name].get('max_frames', 'N/A')}" for name in model_names],
+        ['Temporal Window'] + [f"{results[name].get('temporal_window', 'N/A')}" for name in model_names],
+        ['Valid Samples'] + [f"{results[name].get('valid_samples', 'N/A')}" for name in model_names],
+        [''] + [''] * len(model_names),  # 구분선
+    ]
+    
+    # 성능 메트릭
     metrics = ['Mean Error (px)', 'Std Error (px)', 'Median Error (px)', 'Max Error (px)', 'Time (ms)', 'FPS']
-    stats_data = [['Metric'] + model_names]
     
     for metric in metrics:
         row = [metric]
@@ -365,6 +398,11 @@ def main():
             'name': 'MobileOne-S0 (QAT)',
             'path': '/hai/home/jdj/dvs/sim/cnn_brownian_sim/checkpoints_mobileone_s0_qat/mobileone_s0_int8.pth',
             'quantized': True
+        },
+        {
+            'name': 'MobileOne-S0 (QAT-Tensor)',
+            'path': '/hai/home/jdj/dvs/sim/cnn_brownian_sim/checkpoints_mobileone_s0_qat_tensor/mobileone_s0_int8.pth',
+            'quantized': True
         }
     ]
     # ============================================================
@@ -375,8 +413,11 @@ def main():
     # 결과 저장 디렉토리 설정
     output_dir = "compare_qnt"
     os.makedirs(output_dir, exist_ok=True)
-    graph_path = os.path.join(output_dir, "compare_graph.png")
-    table_path = os.path.join(output_dir, "compare_table.png")
+    
+    # 날짜 형식으로 파일명 생성
+    date_str = datetime.now().strftime("%m%d")
+    graph_path = os.path.join(output_dir, f"{date_str}_graph.png")
+    log_path = os.path.join(output_dir, f"{date_str}_detail.log")
     
     # 필수 데이터 파일 존재 확인
     if not os.path.exists(bin_file):
@@ -399,7 +440,7 @@ def main():
                 checkpoint_path=model_cfg['path'],
                 bin_file_path=bin_file,
                 csv_labels_path=csv_labels,
-                max_frames=100,
+                max_frames=1000,
                 use_quantized=model_cfg['quantized'],
                 model_name=model_cfg['name']
             )
@@ -417,20 +458,43 @@ def main():
     safe_samples = min_samples - 3  # 안전 마진
     
     print(f"\n📊 Using {safe_samples} samples for fair comparison (excluded last 3)")
+    print(f"   Original sample counts: {[len(results[name]['predictions']) for name in results.keys()]}")
     
     for name in results:
         for key in ['predictions', 'targets', 'pixel_errors']:
             results[name][key] = results[name][key][:safe_samples]
+        # valid_samples도 업데이트
+        results[name]['valid_samples'] = safe_samples
             
-    # 비교 그래프 생성
-    compare_multiple_models(results, save_path=graph_path)
+    # 로그 파일로 리다이렉트 시작
+    log_file = open(log_path, 'w', encoding='utf-8')
     
-    # 통계 표 생성
-    create_statistics_table(results, save_path=table_path)
+    class Tee:
+        def __init__(self, *files):
+            self.files = files
+        def write(self, obj):
+            for f in self.files:
+                f.write(obj)
+                f.flush()
+        def flush(self):
+            for f in self.files:
+                f.flush()
     
-    print(f"\n✅ Comparison completed!")
-    print(f"   Graph saved to: {graph_path}")
-    print(f"   Table saved to: {table_path}")
+    # stdout을 파일과 콘솔 모두에 출력하도록 설정
+    original_stdout = sys.stdout
+    sys.stdout = Tee(original_stdout, log_file)
+    
+    try:
+        # 비교 그래프 생성
+        compare_multiple_models(results, save_path=graph_path)
+        
+        print(f"\n✅ Comparison completed!")
+        print(f"   Graph saved to: {graph_path}")
+        print(f"   Log saved to: {log_path}")
+    finally:
+        # 원래 stdout으로 복원
+        sys.stdout = original_stdout
+        log_file.close()
 
 
 if __name__ == "__main__":
