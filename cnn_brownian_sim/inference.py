@@ -8,6 +8,7 @@ import numpy as np
 import os
 import sys
 import time
+import argparse
 from typing import List, Tuple, Dict, Any
 
 # 상위 디렉토리를 sys.path에 추가 (lib 모듈 사용을 위해)
@@ -126,9 +127,8 @@ class DVSInference:
         
         for frame in frames:
             frame_array = np.array(frame.raw_data, dtype=np.float32)
-            
-            if not ('mobileone' in self.model_name):
-                frame_array = frame_array / 2.0  # 고정 스케일링
+            # 학습과 동일하게 스케일링 없이 0/1/2 원본 값 유지
+            # (모델 내에서 sigmoid/hardsigmoid로 0~1 범위 출력)
             individual_frames.append(frame_array)
         
         print(f"   Loaded {len(individual_frames)} frames")
@@ -297,96 +297,68 @@ class DVSInference:
         
         print(f"📊 Inference visualization saved to: {save_path}")
 
-def find_available_models():
-    """사용 가능한 모델들 찾기"""
+def find_available_models(base_dir: str = '.'):
+    """현재 폴더의 checkpoints_* 디렉터리만 나열. 폴더명으로 qat/해상도 추론."""
     models = []
-    for d in os.listdir('.'):
-        if d.startswith('checkpoints_') and os.path.isdir(d):
-            config_path = os.path.join(d, 'config.json')
-            model_info = {'name': 'Unknown', 'temporal_window': 1, 'max_frames': 0, 'epochs': 0, 'roi_size': [512, 512], 'use_qat': False}
-            
-            # 디렉토리 이름에서 QAT 여부 확인
-            is_qat_from_dir = '_qat' in d
-            
-            if os.path.exists(config_path):
-                try:
-                    import json
-                    with open(config_path, 'r') as f:
-                        config = json.load(f)
-                        tc = config.get('training_config', {})
-                        model_info = {
-                            'name': config.get('model_name', 'Unknown'),
-                            'temporal_window': tc.get('temporal_window', 1),
-                            'max_frames': tc.get('max_frames', 0),
-                            'epochs': tc.get('num_epochs', 0),
-                            'roi_size': tc.get('roi_size', [512, 512]),
-                            'use_qat': config.get('use_qat', is_qat_from_dir)
-                        }
-                except: pass
-                
-            best_file = next((f for f in os.listdir(d) if f.endswith('_best.pth')), None)
-            int8_file = next((f for f in os.listdir(d) if f.endswith('_int8.pth')), None)
-            
-            target_file = None
-            
-            if int8_file:
-                target_file = int8_file
-            elif best_file:
-                target_file = best_file
-
-            if target_file:
-                models.append({
-                    'path': os.path.join(d, target_file),
-                    'dir': d,
-                    **model_info
-                })
+    for d in sorted(os.listdir(base_dir)):
+        if not d.startswith('checkpoints_') or not os.path.isdir(os.path.join(base_dir, d)):
+            continue
+        dir_path = os.path.join(base_dir, d)
+        files = os.listdir(dir_path)
+        pth = next((f for f in files if f.endswith('_int8.pth')), None) or next((f for f in files if f.endswith('_best.pth')), None)
+        if not pth:
+            continue
+        models.append({
+            'path': os.path.join(dir_path, pth),
+            'dir': d,
+            'name': d.replace('checkpoints_', '', 1),
+            'use_qat': '_qat' in d,
+            'roi_str': '720x960' if '_720x960' in d else '512x512',
+        })
     return models
 
-def select_model():
-    """모델 선택 메뉴"""
-    print("🔮 DVS CNN Inference System")
-    print("=" * 50)
-    
-    models = find_available_models()
+def select_model(base_dir: str = '.'):
+    """체크포인트 폴더 목록을 보여주고 하나 선택."""
+    models = find_available_models(base_dir)
     if not models:
-        print("❌ 사용 가능한 학습된 모델이 없습니다.")
+        print("❌ checkpoints_* 폴더가 없습니다.")
         return None
-    
-    print(f"\n📋 사용 가능한 모델들 ({len(models)}개):")
-    for i, model in enumerate(models, 1):
-        # use_qat 값에 따라 표시
-        if model['use_qat']:
-            mode_str = "INT8/CPU" # QAT면 INT8로 추론
-        else:
-            mode_str = "FP32/GPU"
-            
-        print(f" {i:<4} {model['name']:<20} {mode_str:<10} {model['temporal_window']:<8} {model['epochs']:<8}")
-
-    # 사용자 선택
-    import sys
+    print("\n📋 체크포인트 폴더:")
+    for i, m in enumerate(models, 1):
+        mode = "QAT" if m['use_qat'] else "FP32"
+        print(f"  {i}  {m['name']:<35} {mode:<6} {m['roi_str']}")
     if not sys.stdin.isatty():
-        print(f"\n✅ {models[0]['name']} 모델을 사용합니다.")
+        print(f"\n✅ {models[0]['name']} 사용")
         return models[0]
-    else:
-        try:
-            choice = input(f"\n모델을 선택하세요 (1-{len(models)}, 기본값 1): ").strip() or "1"
-        except (KeyboardInterrupt, EOFError):
-            choice = "1"
-    
     try:
+        choice = input(f"\n선택 (1-{len(models)}, 기본 1): ").strip() or "1"
         idx = int(choice) - 1
-        selected = models[idx] if 0 <= idx < len(models) else models[0]
-        return selected
-    except (ValueError, IndexError):
+        return models[idx] if 0 <= idx < len(models) else models[0]
+    except (ValueError, IndexError, EOFError, KeyboardInterrupt):
         return models[0]
 
 def main():
     """메인 추론 테스트"""
-    selected_model = select_model()
+    parser = argparse.ArgumentParser(description='DVS CNN 추론 시스템')
+    parser.add_argument('-n', '--num-frames', type=int, default=50, help='추론할 프레임 수')
+    args = parser.parse_args()
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    selected_model = select_model(script_dir)
     if not selected_model:
         return
-    
-    print(f"\n✅ Selected model: {selected_model['name']} (QAT = {selected_model['use_qat']})")
+    print(f"\n✅ 선택: {selected_model['name']} ({'QAT' if selected_model['use_qat'] else 'FP32'}, {selected_model['roi_str']})")
+
+    # 선택한 체크포인트 해상도에 맞춰 데이터 경로 설정
+    if selected_model['roi_str'] == '720x960':
+        bin_file_path = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_720x960.bin"
+        csv_labels_path = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_720x960_labels.csv"
+        roi_load, roi_dataset = (960, 720), (720, 960)
+    else:
+        bin_file_path = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
+        csv_labels_path = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
+        roi_load = roi_dataset = (512, 512)
+    print(f"📐 해상도: {selected_model['roi_str']}  📊 프레임: {args.num_frames}")
     try:
         inferencer = DVSInference(
             selected_model['path'],
@@ -398,17 +370,16 @@ def main():
     
     # 벤치마크
     print(f"\n🏃 {selected_model['name']} 모델 벤치마크...")
-    benchmark_results = inferencer.benchmark(num_iterations=50)
+    benchmark_results = inferencer.benchmark(num_iterations=50, roi_size=roi_dataset)
     
     # 데이터 로드
-    bin_file_path = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
-    csv_labels_path = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
-    
     if os.path.exists(bin_file_path):
-        individual_frames = inferencer.load_frames_from_bin(bin_file_path, max_frames=50)
+        individual_frames = inferencer.load_frames_from_bin(bin_file_path, max_frames=args.num_frames, roi_size=roi_load)
     else:
-        print("⚠️ 더미 데이터 사용")
-        individual_frames = [np.random.rand(512, 512).astype(np.float32) for _ in range(50)]
+        print(f"⚠️ bin 파일을 찾을 수 없습니다: {bin_file_path}")
+        print("   더미 데이터 사용")
+        h, w = roi_dataset
+        individual_frames = [np.random.rand(h, w).astype(np.float32) for _ in range(args.num_frames)]
     
     if not os.path.exists(csv_labels_path):
         print(f"⚠️ CSV 레이블 파일을 찾을 수 없습니다: {csv_labels_path}")
@@ -418,7 +389,7 @@ def main():
     # 추론 실행
     print(f"\n🔮 {selected_model['name']} 모델 추론...")
     if csv_labels_path and os.path.exists(csv_labels_path):
-        results = inferencer.predict_from_frames(individual_frames, csv_labels_path)
+        results = inferencer.predict_from_frames(individual_frames, csv_labels_path, roi_size=roi_dataset)
     else:
         print("⚠️ CSV 레이블이 없어 추론만 수행합니다 (오차 계산 불가)")
         # CSV 없이도 추론 가능하도록 수정 필요하지만, 일단 경고만 출력
@@ -426,10 +397,11 @@ def main():
     
     # 결과 출력
     print(f"\n📈 결과: {len(results['predictions'])}개, {results['mean_time']:.2f}ms, {results['fps']:.1f} FPS")
-    print(f"   오차: {results['mean_error']:.3f}±{results['std_error']:.3f}")
+    if len(results['errors']) > 0:
+        print(f"   오차: {results['mean_error']:.3f}±{results['std_error']:.3f}")
     
-    # 시각화 저장
-    output_path = os.path.join(selected_model['dir'], f"{selected_model['name']}_inference_results.png")
+    # 시각화 저장 (체크포인트 폴더에)
+    output_path = os.path.join(script_dir, selected_model['dir'], f"{selected_model['name']}_inference_results.png")
     inferencer.visualize_inference_results(results, output_path)
     print(f"\n✅ 완료! 결과: {output_path}")
 

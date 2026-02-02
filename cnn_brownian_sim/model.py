@@ -70,7 +70,7 @@ class MobileOneS0(nn.Module):
         )
         
         # 4. Sigmoid 추가
-        self.sigmoid = nn.Sigmoid()
+        #self.sigmoid = nn.Sigmoid()
         self.hsigmoid = nn.Hardsigmoid()
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -81,7 +81,7 @@ class MobileOneS0(nn.Module):
         x = self.dequant(x)
         # Sigmoid로 0-1 범위 제한 
         #return self.sigmoid(x)
-        return self.hsigmoid(x)
+        return self.hsigmoid(x) # Hardsigmoid: ReLU6(x+3)/6
     
     def reparameterize(self):
         """모든 MobileOneBlock을 single-branch로 변환 (추론 최적화)"""
@@ -125,29 +125,50 @@ def get_model(model_name: str, use_qat: bool = False, **kwargs) -> nn.Module:
     
     return model
 
+import torch
+import torch.nn as nn
+from torch.ao.quantization import fuse_modules
 
-def fuse_mobilenetv2_layers(model):
+def fuse_conv_relu(model):
     """
-    MobileNetV2의 내부 구조(InvertedResidual)를 파고들어서
-    [Conv + BN + ReLU] 또는 [Conv + BN]을 찾아서 퓨전합니다.
+    MobileOne 모델의 MobileOneBlock 내부에서 [Conv2d + ReLU]를 ConvReLU2d로 fusion합니다.
+    
+    MobileOneBlock 구조:
+    - reparam_conv: Conv2d
+    - activation: ReLU
     """
-    # 1. Feature Extractor 내부 순회
-    for m in model.modules():
-        # torchvision의 MobileNetV2 블록 구조에 대응
-        # ConvBNActivation(Sequential) 형태를 찾아서 퓨전
-        if isinstance(m, nn.Sequential) and len(m) == 3:
-            # Conv + BN + ReLU (예: expansion, depthwise)
-            # 보통 내부 이름이 ['0', '1', '2']로 되어 있음
-            if isinstance(m[0], nn.Conv2d) and isinstance(m[1], nn.BatchNorm2d) and isinstance(m[2], nn.ReLU):
-                fuse_modules(m, ['0', '1', '2'], inplace=True)
-        
-        elif isinstance(m, nn.Sequential) and len(m) == 2:
-            # Conv + BN (예: projection, 마지막 레이어 등 ReLU가 없는 경우)
-            if isinstance(m[0], nn.Conv2d) and isinstance(m[1], nn.BatchNorm2d):
-                fuse_modules(m, ['0', '1'], inplace=True)
+    print("🔄 Starting MobileOne Fusion (Target: reparam_conv + activation)...")
+    
+    fused_counts = {"conv_relu": 0, "linear_relu": 0}
 
-    print("✅ MobileNetV2 layers fused (Conv+BN+ReLU)")
+    for name, module in list(model.named_modules()):
+        # -----------------------------------------------------------
+        # 1. MobileOneBlock Fusion (Conv + ReLU)
+        # -----------------------------------------------------------
+        if hasattr(module, 'reparam_conv') and hasattr(module, 'activation'):
+            if isinstance(module.reparam_conv, nn.Conv2d) and isinstance(module.activation, nn.ReLU):
+                # Fusion 수행 (inplace=True로 원본 모델 변경)
+                fuse_modules(module, ['reparam_conv', 'activation'], inplace=True)
+                fused_counts['conv_relu'] += 1
+
+        # -----------------------------------------------------------
+        # 2. Head Fusion (Linear + ReLU)
+        # -----------------------------------------------------------
+        if isinstance(module, nn.Sequential):
+            for i in range(len(module) - 1):
+                if isinstance(module[i], nn.Linear) and isinstance(module[i+1], nn.ReLU):
+                    fuse_modules(module, [str(i), str(i+1)], inplace=True)
+                    fused_counts['linear_relu'] += 1
+
+    # Result Report
+    print(f"✅ Fusion Complete: {fused_counts['conv_relu']} Blocks (ConvReLU), {fused_counts['linear_relu']} Head Layers (LinearReLU)")
+    
+    if fused_counts['conv_relu'] == 0:
+        print("⚠️ Critical Warning: Conv+ReLU 융합이 수행되지 않았습니다. 변수명을 다시 확인해주세요.")
+    
     return model
+
+
 
 class PowerOfTwoObserver(MovingAverageMinMaxObserver):
     """ Scale 값을 2의 거듭제곱으로 강제함 (Activation용)"""
@@ -157,6 +178,9 @@ class PowerOfTwoObserver(MovingAverageMinMaxObserver):
         
         # 2. Scale을 가장 가까운 2의 n승으로 변환 (PoT)
         # log2(scale) -> 반올림 -> 2^round(...)
+        eps = torch.tensor(1e-9).to(scale.device)
+        scale = torch.max(scale, eps)
+        
         scale_log2 = torch.log2(scale)
         scale_pot = torch.pow(2, torch.round(scale_log2))
         
@@ -170,13 +194,15 @@ class PowerOfTwoPerChannelObserver(PerChannelMinMaxObserver):
     def calculate_qparams(self):
         scale, zero_point = super().calculate_qparams()
         
+        eps = torch.tensor(1e-9).to(scale.device)
+        scale = torch.max(scale, eps)
+        
         # Scale -> PoT 변환
         scale_log2 = torch.log2(scale)
         scale_pot = torch.pow(2, torch.round(scale_log2))
         
         # Zero Point -> 0 강제
         zero_point = torch.zeros_like(zero_point)
-        
         return scale_pot, zero_point
 
 
@@ -199,15 +225,15 @@ def prepare_qat_model(model: nn.Module, per_channel: bool = True) -> nn.Module:
         # 모델을 학습 모드로 설정 (QAT는 학습 모드에서만 작동)
         model.train()
         model.to('cpu') # 설정 안전성 확보
-
-        # Fuse MobileNetV2 layers (QATWrapper 없이 모델에 quant/dequant가 포함된 상태 가정)
-        if hasattr(model, 'backbone') and 'MobileNetV2' in str(type(model.backbone)):
-             # MobileNetV2인 경우 퓨전 수행
-             fuse_mobilenetv2_layers(model)
+        
+        # Fuse MobileOne layers (Conv + ReLU -> ConvReLU2d)
+        if hasattr(model, 'backbone') and hasattr(model.backbone, 'stage0'):
+            # MobileOne 모델인 경우 Conv+ReLU fusion 수행
+            fuse_conv_relu(model)
 
         # 1. Activation Observer (공통)
         act_observer = FakeQuantize.with_args(
-            observer = PowerOfTwoObserver,
+            observer = MovingAverageMinMaxObserver,
             dtype=torch.quint8,
             qscheme=torch.per_tensor_affine,
             reduce_range=True,
@@ -215,7 +241,7 @@ def prepare_qat_model(model: nn.Module, per_channel: bool = True) -> nn.Module:
         )
         
         act_observer_symmetric = FakeQuantize.with_args(
-            observer = PowerOfTwoObserver,
+            observer = MovingAverageMinMaxObserver,
             dtype=torch.qint8,
             qscheme=torch.per_tensor_symmetric,
             reduce_range=True,
@@ -226,7 +252,7 @@ def prepare_qat_model(model: nn.Module, per_channel: bool = True) -> nn.Module:
         if per_channel:
             # [기존] Per-Channel
             weight_obs_conv = FakeQuantize.with_args(
-                observer = PowerOfTwoPerChannelObserver,
+                observer = PerChannelMinMaxObserver,
                 dtype=torch.qint8,
                 qscheme=torch.per_channel_symmetric,
                 quant_min=-127, quant_max=127, eps=2e-5
@@ -234,7 +260,7 @@ def prepare_qat_model(model: nn.Module, per_channel: bool = True) -> nn.Module:
         else:
             # [수정 후] Per-Tensor
             weight_obs_conv = FakeQuantize.with_args(
-                observer = PowerOfTwoObserver,
+                observer = MovingAverageMinMaxObserver,
                 dtype=torch.qint8,
                 qscheme=torch.per_tensor_symmetric,
                 quant_min=-127, quant_max=127, eps=2e-5
@@ -243,7 +269,7 @@ def prepare_qat_model(model: nn.Module, per_channel: bool = True) -> nn.Module:
         # 3. Linear용 설정 (Per-Tensor Symmetric)
         # Linear는 Per-Channel을 쓰면 error 발생!
         weight_obs_linear = FakeQuantize.with_args(
-            observer = PowerOfTwoObserver,
+            observer = MovingAverageMinMaxObserver,
             dtype=torch.qint8,
             qscheme=torch.per_tensor_symmetric, # Linear는 텐서 통째로!
             quant_min=-127, quant_max=127, eps=2e-5
@@ -343,57 +369,6 @@ def count_parameters(model: nn.Module) -> Dict[str, int]:
     }
 
 
-if __name__ == "__main__":
-    # 모델 테스트
-    print("🧪 Testing DVS CNN Models")
-    print("=" * 40)
-    
-    # 테스트 입력 (배치크기=2, 채널=1, 높이=384, 너비=384)
-    test_input = torch.randn(2, 1, 384, 384)
-    
-    for model_name in ['mobilenet_v2', 'mobileone_s0']:
-        print(f"\n📊 {model_name.upper()} Model:")
-        
-        # 모델 생성
-        model = get_model(model_name)
-        model.eval()
-        
-        # 파라미터 수 계산
-        params = count_parameters(model)
-        print(f"   Parameters: {params['total']:,}")
-        
-        # 추론 테스트
-        with torch.no_grad():
-            start_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
-            end_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
-            
-            if start_time:
-                start_time.record()
-            
-            output = model(test_input)
-            
-            if end_time:
-                end_time.record()
-                torch.cuda.synchronize()
-                inference_time = start_time.elapsed_time(end_time)
-                print(f"   Inference time: {inference_time:.2f}ms")
-            
-            print(f"   Output shape: {output.shape}")
-            print(f"   Output range: [{output.min().item():.3f}, {output.max().item():.3f}]")
-            print(f"   Sample output: {output[0].tolist()}")
-        
-        # MobileOne의 경우 reparameterization 테스트
-        if model_name == 'mobileone_s0':
-            print(f"\n   🔄 Testing reparameterization...")
-            model.reparameterize()
-            model.eval()
-            
-            with torch.no_grad():
-                output_reparam = model(test_input)
-                print(f"   ✅ Reparameterized output shape: {output_reparam.shape}")
-                print(f"   ✅ Output difference: {torch.abs(output - output_reparam).max().item():.6f}")
-
-
 class MobileNetV2Regressor(nn.Module):
     """MobileNetV2 기반 회귀 모델 - 특징 추출기 + 커스텀 분류기"""
     
@@ -467,3 +442,52 @@ class MobileNetV2Regressor(nn.Module):
             'input_channels': self.regressor[3].in_features if hasattr(self.regressor[3], 'in_features') else 'Unknown'
         }
 
+if __name__ == "__main__":
+    # 모델 테스트
+    print("🧪 Testing DVS CNN Models")
+    print("=" * 40)
+    
+    # 테스트 입력 (배치크기=2, 채널=1, 높이=384, 너비=384)
+    test_input = torch.randn(2, 1, 384, 384)
+    
+    for model_name in ['mobilenet_v2', 'mobileone_s0']:
+        print(f"\n📊 {model_name.upper()} Model:")
+        
+        # 모델 생성
+        model = get_model(model_name)
+        model.eval()
+        
+        # 파라미터 수 계산
+        params = count_parameters(model)
+        print(f"   Parameters: {params['total']:,}")
+        
+        # 추론 테스트
+        with torch.no_grad():
+            start_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+            end_time = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
+            
+            if start_time:
+                start_time.record()
+            
+            output = model(test_input)
+            
+            if end_time:
+                end_time.record()
+                torch.cuda.synchronize()
+                inference_time = start_time.elapsed_time(end_time)
+                print(f"   Inference time: {inference_time:.2f}ms")
+            
+            print(f"   Output shape: {output.shape}")
+            print(f"   Output range: [{output.min().item():.3f}, {output.max().item():.3f}]")
+            print(f"   Sample output: {output[0].tolist()}")
+        
+        # MobileOne의 경우 reparameterization 테스트
+        if model_name == 'mobileone_s0':
+            print(f"\n   🔄 Testing reparameterization...")
+            model.reparameterize()
+            model.eval()
+            
+            with torch.no_grad():
+                output_reparam = model(test_input)
+                print(f"   ✅ Reparameterized output shape: {output_reparam.shape}")
+                print(f"   ✅ Output difference: {torch.abs(output - output_reparam).max().item():.6f}")

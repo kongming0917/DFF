@@ -17,10 +17,10 @@ MobileOne-S0 (QAT-Tensor)      | Max Frames: 1000   | Temporal Window: 5   | Val
 📈 Performance Statistics:
 Model                     Mean Error      Std Error       Median          Max Error       Time(ms)        FPS       
 --------------------------------------------------------------------------------------------------------------------
-MobileNetV2 (Standard)    1.948           1.185           1.741           10.903          3.86            259.1     
-MobileOne-S0 (Standard)   2.413           1.226           2.241           8.470           8.89            112.5     
-MobileOne-S0 (QAT)        33.028          23.885          40.200          70.711          8.85            113.0     
-MobileOne-S0 (QAT-Tensor) 33.719          23.092          40.234          70.711          8.14            122.9     
+MobileNetV2 (Standard)    1.948           1.185           1.741           10.903          2.56            390.9     
+MobileOne-S0 (Standard)   2.413           1.226           2.241           8.470           8.83            113.3     
+MobileOne-S0 (QAT)        32.908          24.021          40.200          70.711          7.89            126.8     
+MobileOne-S0 (QAT-Tensor) 32.945          23.984          40.200          70.711          7.55            132.5     
 ====================================================================================================
 
 ✅ Comparison completed!

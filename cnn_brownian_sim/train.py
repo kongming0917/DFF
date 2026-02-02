@@ -6,7 +6,7 @@ train.py: DVS 레이저 중심점 탐지 모델 훈련 스크립트
 import os
 import sys
 import argparse
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+#os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 # -h 옵션을 먼저 체크 (import 오류 전에 도움말을 볼 수 있도록)
 if '-h' in sys.argv or '--help' in sys.argv:
     import argparse
@@ -14,6 +14,7 @@ if '-h' in sys.argv or '--help' in sys.argv:
     parser.add_argument('-single', action='store_true', help='단일 프레임 모드 (temporal_window=1)')
     parser.add_argument('-qat', action='store_true', help='INT8 QAT 모드 (granularity: per-channel)')
     parser.add_argument('-qat-tensor', action='store_true', help='INT8 QAT per-tensor 모드 (granularity: per-channel)')
+    parser.add_argument('-org', action='store_true', help='원본 해상도 모드 (720x960, 기본값: 512x512)')
     parser.print_help()
     sys.exit(0)
 
@@ -583,9 +584,17 @@ class DVSBrownianTrainer:
             traceback.print_exc()
 
 
-def load_individual_frames_from_bin(bin_file_path: str, max_frames: Optional[int] = None) -> List[np.ndarray]:
-    """DVS bin 파일에서 개별 프레임 로딩"""
+def load_individual_frames_from_bin(bin_file_path: str, max_frames: Optional[int] = None, height: int = 512, width: int = 512) -> List[np.ndarray]:
+    """DVS bin 파일에서 개별 프레임 로딩
+    
+    Args:
+        bin_file_path: bin 파일 경로
+        max_frames: 최대 프레임 수
+        height: 프레임 높이 (기본값: 512)
+        width: 프레임 너비 (기본값: 512)
+    """
     print(f"📖 Loading individual frames from {bin_file_path}")
+    print(f"   Resolution: {height}x{width}")
     
     # DVS bin 파일이 존재하는지 확인
     if not os.path.exists(bin_file_path):
@@ -593,8 +602,8 @@ def load_individual_frames_from_bin(bin_file_path: str, max_frames: Optional[int
     
     try:
         # 실제 DVS bin 파일 로딩       
-        # BinProcessor 사용하여 프레임 로드 (Brownian motion: 512x512)
-        processor = BinProcessor(512, 512, has_header=True)
+        # BinProcessor 사용하여 프레임 로드 (frame_width, frame_height 순서)
+        processor = BinProcessor(frame_width=width, frame_height=height, has_header=True)
         
         # 최대 프레임 수 제한 (메모리 보호)
         max_frames_limit = max_frames or 200  # 적절한 기본값
@@ -625,7 +634,8 @@ def train_brownian_model(
     csv_labels_path: str,
     lr: Optional[float] = None,
     use_qat: bool = False,  # QAT 옵션 추가
-    qat_per_channel: bool = True  # QAT per-channel 여부
+    qat_per_channel: bool = True,  # QAT per-channel 여부
+    use_original_resolution: bool = False  # 원본 해상도 사용 여부
 ):
     """Brownian Motion 방식으로 모델 훈련 (CSV 레이블 사용)
     
@@ -636,10 +646,23 @@ def train_brownian_model(
         lr: 학습률 (옵션)
         use_qat: QAT 모드 사용 여부 (int8 양자화)
         qat_per_channel: QAT per-channel 여부 (False면 per-tensor)
+        use_original_resolution: 원본 해상도 사용 여부 (True: 720x960, False: 512x512)
     """
     
     # 기본값 설정
     default_lr = 0.001
+    
+    # 해상도에 따른 설정
+    if use_original_resolution:
+        frame_height, frame_width = 720, 960
+        roi_size = (720, 960)
+    else:
+        frame_height, frame_width = 512, 512
+        roi_size = (512, 512)
+    
+    # roi_size를 config에서 덮어쓰기
+    config = config.copy()
+    config['roi_size'] = roi_size
     
     # 전체 설정 병합
     full_config = {
@@ -655,10 +678,16 @@ def train_brownian_model(
         else:
             full_config['save_dir'] = f"checkpoints_{config['model_name']}_qat_tensor"
     
+    # 원본 해상도 모드인 경우 디렉토리 이름에 표시
+    if use_original_resolution:
+        full_config['save_dir'] = full_config['save_dir'] + '_720x960'
+    
     # 개별 프레임 로드
     individual_frames = load_individual_frames_from_bin(
         bin_file_path, 
-        max_frames=full_config.get('max_frames')
+        max_frames=full_config.get('max_frames'),
+        height=frame_height,
+        width=frame_width
     )
     
     # 체크포인트 디렉토리 생성
@@ -705,11 +734,18 @@ if __name__ == "__main__":
     parser.add_argument('-single', action='store_true', help='단일 프레임 모드 (temporal_window=1)')
     parser.add_argument('-qat', action='store_true', help='QAT 모드 (int8 양자화, 기본: per-channel)')
     parser.add_argument('-qat-tensor', action='store_true', help='QAT per-tensor 모드 (기본은 per-channel)')
+    parser.add_argument('-org', action='store_true', help='원본 해상도 모드 (720x960, 기본값: 512x512)')
     args = parser.parse_args()
     
-    # Brownian Motion 데이터셋 파일 경로
-    BIN_FILE_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
-    CSV_LABELS_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
+    # Brownian Motion 데이터셋 파일 경로 (해상도에 따라 동적으로 설정)
+    if args.org:
+        BIN_FILE_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_720x960.bin"
+        CSV_LABELS_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_720x960_labels.csv"
+        print("📐 원본 해상도 모드 (720x960) 사용")
+    else:
+        BIN_FILE_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
+        CSV_LABELS_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
+        print("📐 ROI crop 모드 (512x512) 사용")
     LEARNING_RATE = 0.001
     
     # 파일 존재 확인
@@ -774,14 +810,18 @@ if __name__ == "__main__":
             csv_labels_path=CSV_LABELS_PATH,
             lr=LEARNING_RATE,
             use_qat=use_qat,
-            qat_per_channel=qat_per_channel
+            qat_per_channel=qat_per_channel,
+            use_original_resolution=args.org
         )
         
         print(f"\n✅ {config['model_name']} 모델 학습 완료!")
-        checkpoint_dir = f"checkpoints_{model_name}"
+        # 실제 저장된 디렉토리 경로 사용 (trainer에서 가져오기)
+        checkpoint_dir = trainer.save_dir
         print(f"📁 체크포인트 저장 위치: {checkpoint_dir}/")
         if use_qat:
             print(f"🔢 양자화된 모델 (int8): {checkpoint_dir}/{config['model_name']}_int8.pth")
+        if args.org:
+            print(f"📐 원본 해상도 모드 (720x960) 체크포인트")
         
     except KeyboardInterrupt:
         print(f"\n⏹️ 사용자가 학습을 중단했습니다.")

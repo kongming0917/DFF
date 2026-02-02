@@ -229,3 +229,55 @@ def create_fixed_gt_dataloader(
         num_workers=num_workers,
         pin_memory=True
     )
+
+if __name__ == "__main__":
+    # ... (기존 테스트 코드 위에 추가하거나 교체) ...
+    
+    # [데이터 값 검증용 코드]
+    print("\n🔍 Inspecting Data Values...")
+    
+    # 테스트용 파일 경로 (train.py에 있던 경로 참고)
+    BIN_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
+    CSV_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
+    
+    if os.path.exists(BIN_PATH) and os.path.exists(CSV_PATH):
+        # 1. 프레임 로드 (train.py의 함수 필요, 여기서는 간단히 직접 로드 시뮬레이션 or import)
+        from lib.bin_processor import BinProcessor
+        
+        try:
+            print(f"   Loading first 100 frames from {BIN_PATH}...")
+            processor = BinProcessor(512, 512, has_header=True)
+            frames_data = processor.read_frames(BIN_PATH, max_frames=100)
+            
+            # numpy 변환
+            individual_frames = [f.raw_data.astype(np.float32) for f in frames_data]
+            
+            # 2. 데이터셋 생성
+            dataset = DVSBrownianDataset(
+                individual_frames, 
+                CSV_PATH, 
+                temporal_window=5
+            )
+            
+            # 3. 첫 번째 샘플 가져와서 값 확인
+            sample_tensor, _ = dataset[0]
+            
+            print("\n📊 Sample Tensor Statistics:")
+            print(f"   Shape: {sample_tensor.shape}")
+            print(f"   Min Value: {sample_tensor.min().item()}")
+            print(f"   Max Value: {sample_tensor.max().item()}")
+            print(f"   Mean Value: {sample_tensor.mean().item():.4f}")
+            
+            # 고유값 확인 (가장 중요: 0, 1, 2 만 나오는지 확인)
+            unique_vals = torch.unique(sample_tensor)
+            print(f"   ℹ️ Unique Values in tensor: {unique_vals.tolist()}")
+            
+            if torch.all(torch.isin(unique_vals, torch.tensor([0., 1., 2.]))):
+                print("   ✅ Data is correctly loaded as raw discrete values (0, 1, 2).")
+            else:
+                print("   ⚠️ Warning: Unexpected values found! (Normalization might be applied?)")
+                
+        except Exception as e:
+            print(f"   ❌ Error during inspection: {e}")
+    else:
+        print("   ⚠️ Data files not found for inspection. Skipping.")
