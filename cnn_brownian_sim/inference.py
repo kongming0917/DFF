@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import argparse
+from tqdm import tqdm
 from typing import List, Tuple, Dict, Any
 
 # 상위 디렉토리를 sys.path에 추가 (lib 모듈 사용을 위해)
@@ -25,28 +26,27 @@ from dataset import DVSBrownianDataset  # Brownian motion 전용
 class DVSInference:
     """간소화된 DVS 추론 클래스"""
     
-    def __init__(self, checkpoint_path: str, device: str = 'auto', use_quantized: bool = False):
+    def __init__(self, checkpoint_path: str, device: str = 'auto', use_quantized: bool = False, model_name: str = None):
         """추론 시스템 초기화
         
         Args:
             checkpoint_path: 체크포인트 파일 경로
             device: 사용할 디바이스 ('auto', 'cuda', 'cpu')
             use_quantized: 양자화된 모델 사용 여부 (자동 감지도 가능)
+            model_name: 선택 시 폴더명에서 정한 모델 타입 ('mobilenet_v2', 'mobileone_s0'). None이면 체크포인트/파일명에서 추론.
         """
         self.checkpoint_path = checkpoint_path
         if not os.path.exists(self.checkpoint_path):
             raise FileNotFoundError(f"❌ Checkpoint not found: {self.checkpoint_path}")
-        
+        self.model_name = model_name  # None이면 _load_model에서 체크포인트/파일명으로 추론
         self.use_quantized = use_quantized
-        
+
         if self.use_quantized:
             self.device = torch.device('cpu')
             print("🔧 Using CPU for quantized inference")
         else:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             print(f"🔧 Using device: {self.device}")
-        
-        self.model_name = "unknown"
         # 모델 로드
         self.model, self.input_channels = self._load_model()
         
@@ -56,25 +56,17 @@ class DVSInference:
         checkpoint = torch.load(self.checkpoint_path, map_location=self.device, weights_only=False)
         
         input_channels = checkpoint.get('input_channels', 5)
-        self.model_name = checkpoint.get('model_name', None)
-        
-        print(f"🔍 Input channels: {input_channels}, Model name: {self.model_name}")
-        
-        # 모델 생성 및 로드 (체크포인트 또는 파일명에서 모델 타입 읽기)
-        file_name = os.path.basename(self.checkpoint_path)
-        
-        # 체크포인트에서 model_name 읽기, 없으면 파일명에서 추론
-        self.model_name = checkpoint.get('model_name', None)
+        # __init__에서 넘긴 model_name 우선, 없으면 체크포인트 → 파일명 순으로 추론
         if self.model_name is None:
-            # 파일명에서 모델 이름 추론
-            if 'mobileone' in file_name.lower() or 's0' in file_name.lower():
-                self.model_name = 'mobileone_s0'
-                print(f"⚠️ [Warning] 'model_name' not found in checkpoint. Inferred from filename: {self.model_name}")
+            self.model_name = checkpoint.get('model_name', None)
+            if self.model_name is None:
+                file_name = os.path.basename(self.checkpoint_path)
+                self.model_name = 'mobileone_s0' if ('mobileone' in file_name.lower() or 's0' in file_name.lower()) else 'mobilenet_v2'
+                print(f"🔍 Input channels: {input_channels}, Model name: {self.model_name} (from filename)")
             else:
-                self.model_name = 'mobilenet_v2'
-                print(f"⚠️ [Warning] 'model_name' not found in checkpoint. Using default: {self.model_name}")
+                print(f"🔍 Input channels: {input_channels}, Model name: {self.model_name} (from checkpoint)")
         else:
-            print(f"🔍 Model name: {self.model_name} (from checkpoint)")
+            print(f"🔍 Input channels: {input_channels}, Model name: {self.model_name} (from selection)")
         
         # 1. skeleton model (FP32)
         model = get_model(self.model_name, input_channels=input_channels, output_dim=2, use_qat=False)
@@ -186,54 +178,44 @@ class DVSInference:
         print(f"📊 Dataset size: {len(dataset)} samples")
         
         if len(dataset) == 0:
-            return {'predictions': [], 'times': [], 'errors': []}
+            return {'predictions': [], 'times': [], 'errors': [], 'pixel_errors': [], 'mean_pixel_error': 0, 'max_pixel_error': 0}
         
         # 추론 실행
         print("🔮 Running inference...")
         predictions = []
         times = []
         errors = []
-    
-        
-        for i in range(len(dataset)):
+        pixel_errors = []
+        targets = []
+        roi_h, roi_w = roi_size[0], roi_size[1]
+
+        for i in tqdm(range(len(dataset)), desc="Inference", unit="sample"):
             sample_input, sample_label = dataset[i]
-            
-            # 배치 차원 추가
             input_tensor = sample_input.unsqueeze(0)
-            
-            # 추론
             output, inference_time = self.predict_single(input_tensor)
-            
-            # 결과 처리
             pred_x, pred_y = output[0]
             true_x, true_y = sample_label.numpy()
-            
             predictions.append((pred_x, pred_y))
             times.append(inference_time)
-            
-            # 오차 계산
-            error = np.sqrt((pred_x - true_x)**2 + (pred_y - true_y)**2)
-            errors.append(error)
-            
-            if i < 5:  # 처음 5개만 출력
-                print(f"   Sample {i}: pred=({pred_x:.3f}, {pred_y:.3f}), true=({true_x:.3f}, {true_y:.3f}), time={inference_time:.2f}ms")
-        
-        # 실제 타겟 값들 수집
-        targets = []
-        for i in range(len(dataset)):
-            _, sample_label = dataset[i]
-            true_x, true_y = sample_label.numpy()
+            err_norm = np.sqrt((pred_x - true_x) ** 2 + (pred_y - true_y) ** 2)
+            errors.append(err_norm)
+            pixel_errors.append(np.sqrt(((pred_x - true_x) * roi_w) ** 2 + ((pred_y - true_y) * roi_h) ** 2))
             targets.append((true_x, true_y))
+            if i < 5:
+                print(f"   Sample {i}: pred=({pred_x:.3f}, {pred_y:.3f}), true=({true_x:.3f}, {true_y:.3f}), time={inference_time:.2f}ms")
         
         return {
             'predictions': predictions,
             'times': times,
             'errors': errors,
+            'pixel_errors': pixel_errors,
             'mean_time': np.mean(times),
             'fps': 1000 / np.mean(times) if np.mean(times) > 0 else 0,
             'mean_error': np.mean(errors),
             'std_error': np.std(errors),
-            'targets': targets  # 실제 타겟 값들
+            'mean_pixel_error': np.mean(pixel_errors),
+            'max_pixel_error': np.max(pixel_errors),
+            'targets': targets
         }
     
     def benchmark(self, num_iterations: int = 100, roi_size: Tuple = (512, 512)) -> Dict[str, float]:
@@ -274,10 +256,9 @@ class DVSInference:
     def visualize_inference_results(self, results: Dict[str, Any], save_path: str = None):
         """추론 결과 시각화"""
         if len(results['predictions']) == 0:
-            print("⚠️ No predictions to visualize")
+            print("No predictions to visualize.")
             return
-        
-        print(f"📊 Creating inference visualization...")
+        print("Creating inference visualization...")
         
         # 데이터 변환
         predictions = np.array(results['predictions'])
@@ -295,7 +276,7 @@ class DVSInference:
             show_plot=False  # headless 환경 대응
         )
         
-        print(f"📊 Inference visualization saved to: {save_path}")
+        print(f"Visualization saved to: {save_path}")
 
 def find_available_models(base_dir: str = '.'):
     """현재 폴더의 checkpoints_* 디렉터리만 나열. 폴더명으로 qat/해상도 추론."""
@@ -308,10 +289,13 @@ def find_available_models(base_dir: str = '.'):
         pth = next((f for f in files if f.endswith('_int8.pth')), None) or next((f for f in files if f.endswith('_best.pth')), None)
         if not pth:
             continue
+        # 폴더명에서 모델 타입 추론 (skeleton 로드 시 사용)
+        model_name = 'mobileone_s0' if ('mobileone' in d.lower() or 's0' in d.lower()) else 'mobilenet_v2'
         models.append({
             'path': os.path.join(dir_path, pth),
             'dir': d,
             'name': d.replace('checkpoints_', '', 1),
+            'model_name': model_name,
             'use_qat': '_qat' in d,
             'roi_str': '720x960' if '_720x960' in d else '512x512',
         })
@@ -362,7 +346,8 @@ def main():
     try:
         inferencer = DVSInference(
             selected_model['path'],
-            use_quantized=selected_model['use_qat']
+            use_quantized=selected_model['use_qat'],
+            model_name=selected_model.get('model_name')  # find_available_models()에서 폴더명으로 넣음
         )
     except FileNotFoundError:
         print(f"❌ 체크포인트 파일을 찾을 수 없습니다: {selected_model['path']}")
@@ -393,17 +378,22 @@ def main():
     else:
         print("⚠️ CSV 레이블이 없어 추론만 수행합니다 (오차 계산 불가)")
         # CSV 없이도 추론 가능하도록 수정 필요하지만, 일단 경고만 출력
-        results = {'predictions': [], 'times': [], 'errors': [], 'mean_time': 0, 'fps': 0, 'mean_error': 0, 'std_error': 0, 'targets': []}
+        results = {'predictions': [], 'times': [], 'errors': [], 'pixel_errors': [], 'mean_time': 0, 'fps': 0, 'mean_error': 0, 'std_error': 0, 'mean_pixel_error': 0, 'max_pixel_error': 0, 'targets': []}
     
-    # 결과 출력
-    print(f"\n📈 결과: {len(results['predictions'])}개, {results['mean_time']:.2f}ms, {results['fps']:.1f} FPS")
-    if len(results['errors']) > 0:
-        print(f"   오차: {results['mean_error']:.3f}±{results['std_error']:.3f}")
-    
-    # 시각화 저장 (체크포인트 폴더에)
+    # 결과 출력 (영어, pixel 오차 포함)
+    n = len(results['predictions'])
+    print(f"\n[Inference Result]")
+    print(f" - Total Samples: {n}")
+    print(f" - Mean time: {results['mean_time']:.2f} ms, FPS: {results['fps']:.1f}")
+    if n > 0 and 'pixel_errors' in results and len(results['pixel_errors']) > 0:
+        print(f" - Average Error: {results['mean_pixel_error']:.4f} (pixel)")
+        print(f" - Max Error: {results['max_pixel_error']:.4f} (pixel)")
+    elif len(results.get('errors', [])) > 0:
+        print(f" - Average Error (norm): {results['mean_error']:.4f} ± {results['std_error']:.4f}")
+
     output_path = os.path.join(script_dir, selected_model['dir'], f"{selected_model['name']}_inference_results.png")
     inferencer.visualize_inference_results(results, output_path)
-    print(f"\n✅ 완료! 결과: {output_path}")
+    print(f"\nDone. Output: {output_path}")
 
 if __name__ == "__main__":
     main()

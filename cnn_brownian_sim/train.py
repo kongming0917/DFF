@@ -11,10 +11,12 @@ import argparse
 if '-h' in sys.argv or '--help' in sys.argv:
     import argparse
     parser = argparse.ArgumentParser(description='DVS 레이저 중심점 탐지 모델 훈련')
-    parser.add_argument('-single', action='store_true', help='단일 프레임 모드 (temporal_window=1)')
-    parser.add_argument('-qat', action='store_true', help='INT8 QAT 모드 (granularity: per-channel)')
-    parser.add_argument('-qat-tensor', action='store_true', help='INT8 QAT per-tensor 모드 (granularity: per-channel)')
-    parser.add_argument('-org', action='store_true', help='원본 해상도 모드 (720x960, 기본값: 512x512)')
+    parser.add_argument('-mode', choices=['default', 'single'], default='default',
+                        help='학습 모드: default(다중 프레임), single(단일 프레임, temporal_window=1)')
+    parser.add_argument('-qat', choices=['channel', 'tensor'], default=None,
+                        help='QAT: 미지정 시 없음, channel(per-channel), tensor(per-tensor)')
+    parser.add_argument('-data', choices=['full', '512'], default='full',
+                        help='데이터 해상도: full(720x960, 기본), 512(512x512)')
     parser.print_help()
     sys.exit(0)
 
@@ -32,6 +34,7 @@ import time
 import json
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
+from tqdm import tqdm
 import matplotlib
 # GUI 환경 확인 후 백엔드 설정
 if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
@@ -156,7 +159,8 @@ class DVSBrownianTrainer:
         predictions = []
         targets = []
         
-        for batch_idx, (roi_batch, label_batch) in enumerate(self.train_loader):
+        pbar = tqdm(self.train_loader, desc='Train', leave=True)
+        for batch_idx, (roi_batch, label_batch) in enumerate(pbar):
             roi_batch = roi_batch.to(self.device)      # (batch, 1, 64, 64)
             label_batch = label_batch.to(self.device)  # (batch, 2)
             
@@ -176,10 +180,8 @@ class DVSBrownianTrainer:
             predictions.extend(outputs.detach().cpu().numpy())
             targets.extend(label_batch.detach().cpu().numpy())
             
-            # 진행률 출력 (매 50 배치마다)
-            if batch_idx % 50 == 0:
-                current_loss = total_loss / total_samples
-                print(f'   Batch {batch_idx}/{len(self.train_loader)}, Loss: {current_loss:.6f}')
+            current_loss = total_loss / total_samples
+            pbar.set_postfix(loss=f'{current_loss:.4f}')
         
         # 에폭 통계 계산
         avg_loss = total_loss / total_samples
@@ -207,7 +209,7 @@ class DVSBrownianTrainer:
         targets = []
         
         with torch.no_grad():
-            for roi_batch, label_batch in self.val_loader:
+            for roi_batch, label_batch in tqdm(self.val_loader, desc='Val', leave=True):
                 roi_batch = roi_batch.to(self.device)
                 label_batch = label_batch.to(self.device)
                 
@@ -652,7 +654,7 @@ def train_brownian_model(
     # 기본값 설정
     default_lr = 0.001
     
-    # 해상도에 따른 설정
+    # 해상도에 따른 설정 (roi_size는 -data/use_original_resolution에서만 결정, config에는 없음)
     if use_original_resolution:
         frame_height, frame_width = 720, 960
         roi_size = (720, 960)
@@ -660,13 +662,11 @@ def train_brownian_model(
         frame_height, frame_width = 512, 512
         roi_size = (512, 512)
     
-    # roi_size를 config에서 덮어쓰기
     config = config.copy()
-    config['roi_size'] = roi_size
-    
-    # 전체 설정 병합
+    # 전체 설정 병합 (roi_size는 여기서 설정)
     full_config = {
         **config,
+        'roi_size': roi_size,
         'lr': lr if lr is not None else config.get('lr', default_lr),
         'save_dir': f"checkpoints_{config['model_name']}"
     }
@@ -731,21 +731,23 @@ def train_brownian_model(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='DVS 레이저 중심점 탐지 모델 훈련')
-    parser.add_argument('-single', action='store_true', help='단일 프레임 모드 (temporal_window=1)')
-    parser.add_argument('-qat', action='store_true', help='QAT 모드 (int8 양자화, 기본: per-channel)')
-    parser.add_argument('-qat-tensor', action='store_true', help='QAT per-tensor 모드 (기본은 per-channel)')
-    parser.add_argument('-org', action='store_true', help='원본 해상도 모드 (720x960, 기본값: 512x512)')
+    parser.add_argument('-mode', choices=['default', 'single'], default='default',
+                        help='학습 모드: default(다중 프레임), single(단일 프레임, temporal_window=1)')
+    parser.add_argument('-qat', choices=['channel', 'tensor'], default=None,
+                        help='QAT: 미지정 시 없음, channel(per-channel), tensor(per-tensor)')
+    parser.add_argument('-data', choices=['full', '512'], default='full',
+                        help='데이터 해상도: full(720x960, 기본), 512(512x512)')
     args = parser.parse_args()
     
-    # Brownian Motion 데이터셋 파일 경로 (해상도에 따라 동적으로 설정)
-    if args.org:
+    # -data에 따른 데이터 경로
+    if args.data == 'full':
         BIN_FILE_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_720x960.bin"
         CSV_LABELS_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_720x960_labels.csv"
-        print("📐 원본 해상도 모드 (720x960) 사용")
+        print("📐 dataset: full (720x960)")
     else:
         BIN_FILE_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512.bin"
         CSV_LABELS_PATH = "/hai/home/jdj/dvs/sim/data/gaussian_brownian_512x512_labels.csv"
-        print("📐 ROI crop 모드 (512x512) 사용")
+        print("📐 dataset: 512 (512x512)")
     LEARNING_RATE = 0.001
     
     # 파일 존재 확인
@@ -776,8 +778,8 @@ if __name__ == "__main__":
             print("\n⏹️ 취소되었습니다.")
             exit(0)
     
-    # Base config 이름 구성 (QAT tensor/channel 모두 동일한 config 사용)
-    base_config_name = f"{base_model}_single" if args.single else base_model
+    # -mode에 따른 config 이름
+    base_config_name = f"{base_model}_single" if args.mode == 'single' else base_model
     
     # 설정 가져오기
     available_configs = get_training_mode_configs()
@@ -786,9 +788,9 @@ if __name__ == "__main__":
         exit(1)
     config = available_configs[base_config_name].copy()
     
-    # QAT 모드 확인 및 최종 모델명 구성
-    use_qat = args.qat or args.qat_tensor  # -qat 또는 -qat-tensor 둘 다 QAT 활성화
-    qat_per_channel = not args.qat_tensor
+    # -qat에 따른 QAT 설정 (미지정=없음, channel/tensor)
+    use_qat = args.qat is not None
+    qat_per_channel = (args.qat == 'channel') if use_qat else True
     
     model_name = base_config_name
     if use_qat:
@@ -811,7 +813,7 @@ if __name__ == "__main__":
             lr=LEARNING_RATE,
             use_qat=use_qat,
             qat_per_channel=qat_per_channel,
-            use_original_resolution=args.org
+            use_original_resolution=(args.data == 'full')
         )
         
         print(f"\n✅ {config['model_name']} 모델 학습 완료!")
@@ -820,8 +822,8 @@ if __name__ == "__main__":
         print(f"📁 체크포인트 저장 위치: {checkpoint_dir}/")
         if use_qat:
             print(f"🔢 양자화된 모델 (int8): {checkpoint_dir}/{config['model_name']}_int8.pth")
-        if args.org:
-            print(f"📐 원본 해상도 모드 (720x960) 체크포인트")
+        if use_original_resolution:
+            print(f"📐 데이터: full (720x960) 체크포인트")
         
     except KeyboardInterrupt:
         print(f"\n⏹️ 사용자가 학습을 중단했습니다.")

@@ -164,24 +164,48 @@ def create_train_val_loaders(
     print(f"📊 Creating Brownian dataset from {len(individual_frames)} individual frames...")
     
     # 전체 데이터셋 생성
-    full_dataset = DVSBrownianDataset(individual_frames, csv_labels_path, **kwargs)
+    train_full_dataset = DVSBrownianDataset(individual_frames, csv_labels_path, **kwargs)
+    train_full_dataset.set_training_mode(True)
+    
+    val_full_dataset = DVSBrownianDataset(individual_frames, csv_labels_path, **kwargs)
+    val_full_dataset.set_training_mode(False)
     
     # 데이터셋 크기 확인
-    dataset_size = len(full_dataset)
+    dataset_size = len(train_full_dataset)
     print(f"   Dataset size: {dataset_size} samples")
     
     if dataset_size == 0:
         raise ValueError(f"❌ Dataset is empty! No valid samples from {len(individual_frames)} frames.")
     
-    train_size = int(train_ratio * dataset_size)
-    val_size = dataset_size - train_size
+    # 분할할 블록 수
+    num_blocks = 5
+    gap = 50
+    block_length = dataset_size // num_blocks
     
-    indices = list(range(dataset_size))
-    train_indices = indices[:train_size]
-    val_indices = indices[train_size:]
+    # 검증 블록 인덱스
+    val_block_indices = {1, 3}
+    train_block_indices = {0, 2, 4}
+   
+    print(f"   ⚙️ Split Strategy: Blocked Split (Blocks: {num_blocks}, Gap: {gap})")
+    print(f"   Validation Blocks: {val_block_indices}") 
     
-    train_dataset = torch.utils.data.Subset(full_dataset, train_indices)
-    val_dataset = torch.utils.data.Subset(full_dataset, val_indices)
+    train_indices = []
+    val_indices = []
+    for i in range(num_blocks):
+        start_idx = i * block_length
+        end_idx = start_idx + block_length
+        
+        valid_end_idx = end_idx - gap
+        
+        block_indices = list(range(start_idx, valid_end_idx))
+        
+        if i in val_block_indices:
+            val_indices.extend(block_indices)
+        else:
+            train_indices.extend(block_indices)
+    
+    train_dataset = torch.utils.data.Subset(train_full_dataset, train_indices)
+    val_dataset = torch.utils.data.Subset(val_full_dataset, val_indices)
         
     train_loader = DataLoader(
         train_dataset,
@@ -191,12 +215,6 @@ def create_train_val_loaders(
         pin_memory=True
     )
     
-    # 검증 모드 설정
-    if hasattr(val_dataset, 'dataset'):
-        val_dataset.dataset.set_training_mode(False)
-    else:
-        val_dataset.set_training_mode(False)
-        
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
