@@ -38,11 +38,11 @@ python tools/evaluate.py --pred-csv filter/results/no_filter_kalman.csv --split 
 
 | 디렉토리 | 역할 |
 |---|---|
-| `dvslib/` | 공통 패키지 — `data`(bin I/O·Dataset·blocked split)·`eval`(metric)·`training`(loop·callback)·`tracking`(wandb). 이식된 방식이 import |
+| `dvslib/` | 공통 패키지 — `data`(bin I/O·Dataset·blocked split)·`eval`(metric·visualize)·`training`(loop·callback·seed)·`tracking`(wandb)·`quant`(PT2E QAT). 모든 방식이 import |
 | `cnn/` | **CNN 회귀 (주력)** — dvslib 기반 thin experiment. MobileNetV2 / MobileOne S0 + PT2E QAT(`train_qat.py`). `cnn_brownian_v2`에서 rename. 자체 `CLAUDE.md` |
 | `yolo/` | **YOLOv3-Tiny 검출** — dvslib 기반 thin experiment. 데이터셋은 CNN과 동일, bbox 타깃·decode는 `model.py`의 hook(`YOLOCriterion`·`YOLOCenterDecoder`). 자체 `CLAUDE.md` |
 | `filter/` | **필터 휴리스틱** (학습 없음) — `dvs_filter.py`(필터·추출기 본체, GT 원점 측정 도구이기도 함)·`run.py`(CSV 생성)·`origin.py`(정지 레이저 원점 후보). 자체 `CLAUDE.md` |
-| `tools/` | 방식 공용 명령줄 도구 — `evaluate.py`(단일 소스 지표), `compare.py`(여러 소스를 blocked val 동일 프레임에서 비교, 로컬 CSV/MD/PNG + 선택적 wandb Table), 오차 시각화, 데이터셋 생성, bin 검사. 예측 얻기는 `_common.py`(cnn/yolo/csv), 계산은 dvslib |
+| `tools/` | 방식 공용 명령줄 도구 — `evaluate.py`(단일 소스 지표), `compare.py`(여러 소스를 blocked val 동일 프레임에서 비교, 로컬 CSV/MD + `--plot` PNG + `--wandb` Table), 오차 시각화, 데이터셋 생성, bin 검사. 예측 얻기는 `_common.py`(cnn/yolo/csv), 계산은 dvslib |
 | `archive/` | fixed-GT 1세대 — `cnn_sim`·`filter_sim`·`yolo_sim` |
 | `eventrans/` | EventTransformer (Phase 3, 예정) |
 
@@ -55,7 +55,7 @@ python tools/evaluate.py --pred-csv filter/results/no_filter_kalman.csv --split 
 - 학습 루프(`dvslib/training/loop.py`)와 평가(`dvslib/eval/evaluate.py`)는 `criterion`·`to_xy` hook으로 방식 차이를 흡수한다. 새 방식은 hook만 제공하고 루프를 복제하지 말 것.
 - `*/mobileone_official.py`는 Apple 공식 구현이므로 수정 금지.
 - 데이터가 시계열이라 random split은 temporal leakage 발생 → blocked / K-fold split 사용 (split 로직은 `dvslib/data/split.py`에 일원화). 이 제약 유지.
-- QAT는 **PT2E(`torch.export`) 기반** `cnn/quantization.py` + `cnn/train_qat.py`. eager QAT(QuantStub 수동 배치)는 폐기됐으므로 되살리지 말 것. FPGA 제약(대칭 INT8)은 `get_fpga_quantizer` 한 곳에만 기술.
+- QAT는 **PT2E(`torch.export`) 기반 `dvslib/quant/pt2e.py`** 하나뿐 (진입점은 `cnn/train_qat.py`). eager QAT(QuantStub 수동 배치)는 폐기됐으므로 되살리지 말 것. FPGA 제약(대칭 INT8)은 `get_fpga_quantizer` 한 곳에만 기술.
 - differentiable logic network 분기(`birel`, `cnn_diff`/LogicDVSNet)는 **삭제됨**. 관련 코드·의존성을 다시 추가하지 말 것.
 - ROI는 `--roi 512`(정사각) 또는 `--roi 720x960`(HxW) — 파싱은 `dvslib.data.dataset.parse_roi` 한 곳. 데이터 경로는 `brownian_paths`로 결정.
 - 분석·시각화 로직은 `dvslib/eval/visualize.py`에 함수로 두고, 방식별 진입점은 `tools/`에 얇게(예측 얻기만 `tools/_common.py`). 방식 디렉토리 안에 시각화 스크립트를 새로 만들지 말 것.

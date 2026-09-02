@@ -89,6 +89,22 @@ ImageNet pretrained**(`mobileone_s0_unfused`, stage0(5ch)·head는 random) — �
 - 옛 기록 **2.66px/92.5%(아래 표)는 blocked split 이전 수치**라 mobilenet phantom 2.11px처럼
   **temporal leakage로 부풀려졌을 가능성**이 큼. 공정 blocked split + pretrained에선 2.82px가 신뢰 baseline.
 
+
+### PT2E QAT (dvslib/quant) — 이동 검증 및 현재 수치
+
+`python cnn/train_qat.py --checkpoint cnn/runs/baseline_mobileone_s0_pretrained/mobileone_s0_best.pth --seed 42`
+(10 epoch, lr 1e-5, cosine, per-channel 대칭 INT8). run: `cnn/runs/qat_mobileone_s0_pretrained_pt2e/`.
+
+| 항목 | 값 |
+|---|---|
+| FP32 (reparam) | 2.8224 px / 85.70 % |
+| **QAT INT8 (converted, cpu)** | **7.1245 px / 45.45 %** (Δ +4.30 px) |
+| epoch별 val px (fake-quant) | 4.66 → 5.35 → 5.67 → 6.22 → … → 6.13 |
+
+- `cnn/quantization.py` → `dvslib/quant/pt2e.py` 이동 전후 **완전 동일** (HEAD worktree 기준 run과 FP32·INT8·epoch 기록 모두 일치).
+- `save_int8`/`load_int8` 왕복: 복원본 재평가 = 7.1245 px (일치).
+- ⚠️ **QAT 자체는 아직 나쁘다**: INT8이 FP32보다 4.3px 나쁘고, fine-tune 중 val이 epoch 1(4.66) 이후 계속 악화 → lr/epoch/observer 설정 재검토 필요 (Phase 2 후속).
+
 ## 보존된 옛 체크포인트 (기록값 — best.pth로 재검증 필요)
 
 리팩토링 전 학습된 체크포인트들. 디스크 절약을 위해 `epoch_*.pth`(수 GB)는 삭제하고
@@ -135,6 +151,25 @@ ImageNet pretrained**(`mobileone_s0_unfused`, stage0(5ch)·head는 random) — �
   (val block은 599~1147, 1797~2345). 500프레임·5 epoch 학습 + random split의 낙관적 검증이 만든 결과로,
   옛 비교표의 YOLO 9.9px는 학습 데이터 위 수치였다. **이식 후에는 CNN과 동일 recipe(3000f, blocked, seed)로 재학습해야 공정 비교 가능.**
 - conf 0.3은 검출률 100%지만 오차는 그대로 큼 → 임계값 문제가 아니라 일반화 실패.
+
+### 재학습 (dvslib, CNN 동일 recipe) — 과적합으로 일반화 실패
+
+`python yolo/train.py --epochs 50 --seed 42 --lr 3e-4` (3000f, blocked split, warmup+cosine, grad_clip, batch 32, from scratch).
+run: `yolo/runs/baseline_yolo_tiny/` (lr 1e-3 시도는 epoch 10에서 같은 양상이라 중단, `*_lr1e-3_aborted/`).
+
+| 평가 구간 | pixel error | Acc@5px | Acc@10px | 검출률 |
+|---|---|---|---|---|
+| **학습 블록** (frames 0~548, last.pth) | **1.07 px** | 98.9 % | 99.8 % | 100 % |
+| **blocked val** (last.pth, 1098) | **216.47 px** | 2.8 % | 3.2 % | 100 % |
+| blocked val (val_loss best = epoch 6) | 232.86 px | 0.0 % | — | 100 % |
+
+epoch별: train_px 166 → 46(ep10) → 4.1(ep20) → 1.1(ep50), val_px 183 → 157(ep10) → 212(ep20) → 216(ep50). val loss 최소는 epoch 6인데
+그 체크포인트는 프레임과 무관하게 한 cell((459,181)px 부근)을 찍는 퇴화 상태 → **val loss는 YOLO의 monitor로 부적합**.
+
+- **결론: from-scratch YOLOv3-Tiny는 학습 window를 외우고 시간 블록을 넘어 일반화하지 못한다.** 같은 데이터·split·recipe의 CNN(ImageNet
+  pretrained 백본)은 2.8px. 차이는 백본 사전학습 유무로 추정 (from-scratch mobileone도 4.6px였음). 데이터 1898 window·증강 없음.
+- 검출률 100%·임계값 무관 → 검출 실패가 아니라 위치 예측이 검증 블록에서 고정값으로 붕괴.
+- 후속 후보: (a) pretrained MobileNetV2 백본 + YOLO 헤드, (b) 증강. 현재 비교표에는 옛 ckpt(93.7px)와 재학습(216px) 둘 다 기록.
 
 ## Filter — 휴리스틱 (`filter/`, dvslib 이식 후 측정)
 

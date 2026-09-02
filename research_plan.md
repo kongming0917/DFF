@@ -70,7 +70,7 @@ archive/                                            # fixed-GT 구버전 (이동
 
 ### 1-4. 활성 방식 마이그레이션 (CNN → YOLO → Filter)
 - [x] **CNN**: `cnn_brownian_v2` → `cnn`, `dvslib` 기반 thin experiment로 재작성 완료. `train.py`·`inference.py` 모두 dvslib 사용. QAT는 `cnn/quantization.py`로 분리, 옛 스크립트·중복 체크포인트 정리. README·CLAUDE 갱신. baseline 재현 검증됨 (2.62px)
-- [x] **YOLO**: `yolo/`로 재작성 완료. 데이터셋은 CNN과 공유, bbox 타깃·decode는 `YOLOCriterion`·`YOLOCenterDecoder` hook. 옛 ckpt로 baseline 93.69px/1.37% **정확 재현**. 옛 디렉토리 삭제. CNN recipe 재학습은 진행 중(결과는 `BASELINE.md`)
+- [x] **YOLO**: `yolo/`로 재작성 완료. 데이터셋은 CNN과 공유, bbox 타깃·decode는 `YOLOCriterion`·`YOLOCenterDecoder` hook. 옛 ckpt로 baseline 93.69px/1.37% **정확 재현**. 옛 디렉토리 삭제. CNN recipe 재학습 결과: **학습 블록 1.07px / val 216px = 과적합** (from-scratch 백본이 원인으로 추정, `BASELINE.md`). 후속: pretrained 백본 시도 여부 결정
 - [x] **Filter**: `filter/`로 이관 완료 (`dvs_filter.py` 동작 불변, `run.py` 진입점). 옛 100f CSV와 bit-identical 검증. 필터 단계 16-worker 병렬(3h→7min). 옛 디렉토리·`lib/` shim 삭제. `origin.py`(GT 원점 후보 측정) 추가
 
 **부속 스크립트 이관** ✓ — `cnn_brownian_sim` 삭제 완료 (재현성 검증: baseline 체크포인트 2.7933px/2.8224px 재현, seed 42 학습 run 간 bit-identical, 기록된 run의 초반 epoch과 일치).
@@ -83,7 +83,7 @@ archive/                                            # fixed-GT 구버전 (이동
 - [x] 720×960 비정사각 ROI: **지원 추가** — `--roi 720x960`(HxW) 파싱을 `dvslib.data.dataset.parse_roi`로 일원화, train/inference 모두 적용. 옛 720×960 체크포인트 로드·평가 동작 확인(단, 그 체크포인트는 pre-blocked 학습이라 수치는 참고용)
 - [x] 위 완료 후 `cnn_brownian_sim` 삭제, `CLAUDE.md`·`README.md` Directory Map 갱신(`tools/` 추가, `cnn_brownian_sim` 제거)
 
-**완료 기준:** 세 방식 모두 통합 구조에서 동작하고, 각자 Phase 0 baseline 지표를 오차 범위 내 재현. 중복 코드 대폭 감소. → **달성** (2026-09-02). 남은 것: YOLO 재학습 결과 기록.
+**완료 기준:** 세 방식 모두 통합 구조에서 동작하고, 각자 Phase 0 baseline 지표를 오차 범위 내 재현. 중복 코드 대폭 감소. → **달성** (2026-09-02). YOLO 재학습은 과적합으로 실패 — 결과 기록 완료, pretrained 백본 재시도는 별도 결정.
 
 ### 1-5. CNN 파이프라인 품질 감사 (code review)
 
@@ -101,9 +101,9 @@ archive/                                            # fixed-GT 구버전 (이동
 
 - [x] `dvslib/tracking`에 wandb 래퍼 (config·metric·Table·이미지). 모델 아티팩트 로깅은 미구현
 - [ ] 학습 시 epoch별 loss/지표, 검증 예측 시각화 자동 로깅
-- [x] `compare_brownian.py`(처음 100f 순차 = 학습 구간, PNG만) 삭제 → `tools/compare.py`: blocked val 동일 프레임(1098) 비교, summary.csv/md + per_frame.csv + 3패널 PNG 로컬 저장, `--wandb`면 Table 기록
+- [x] `compare_brownian.py`(처음 100f 순차 = 학습 구간, PNG만) 삭제 → `tools/compare.py`: blocked val 동일 프레임(1098) 비교, summary.csv/md + per_frame.csv 로컬 저장, `--plot`이면 3패널 PNG, `--wandb`면 Table 기록
 - [x] 3가지 방식을 동일 split·지표로 한 번에 비교하는 스크립트 (`tools/compare.py`, 소스 몇 개든 `--cnn/--yolo/--csv NAME=PATH`)
-- [~] **QAT를 PT2E 기반으로 통일 (eager 대체).** `cnn/quantization.py`·`cnn/train_qat.py`가 PT2E로 재작성됨(진행 중 — `dvslib/quant`로의 이동, `export_mobileone_info.py` PT2E 대응은 남음). 옛 eager 코드는 **MobileOne 전용**(MobileNetV2는 QuantStub 부재·fusion 스킵으로 QAT 불가)이고 `reduce_range` 등 x86 잔재가 박혀 있음. PT2E(`capture_pre_autograd_graph` + Quantizer)는 **모델 무관**으로 observer/fake-quant·Conv-BN fusion을 그래프에서 자동 처리 → CNN(mobilenet_v2/mobileone_s0)·YOLO·EventTransformer에 동일 적용. FPGA 제약(대칭 INT8, 향후 PoT·bit-width)은 Quantizer 한 곳에 기술. **부수 작업**: FPGA weight 추출(`export_mobileone_info.py`)을 PT2E 그래프 기준으로 재작성, 옛 eager INT8 체크포인트는 호환 불가(재학습 필요).
+- [x] **QAT를 PT2E 기반 `dvslib/quant/pt2e.py`로 통일 (eager 대체).** `cnn/train_qat.py`는 얇은 진입점. `save_int8`/`load_int8`로 INT8 그래프 저장·복원, `model_summary.py --int8`이 복원 검증. 남은 것: `export_mobileone_info.py` PT2E 대응(별도 항목). 옛 eager 코드는 **MobileOne 전용**(MobileNetV2는 QuantStub 부재·fusion 스킵으로 QAT 불가)이고 `reduce_range` 등 x86 잔재가 박혀 있음. PT2E(`capture_pre_autograd_graph` + Quantizer)는 **모델 무관**으로 observer/fake-quant·Conv-BN fusion을 그래프에서 자동 처리 → CNN(mobilenet_v2/mobileone_s0)·YOLO·EventTransformer에 동일 적용. FPGA 제약(대칭 INT8, 향후 PoT·bit-width)은 Quantizer 한 곳에 기술. **부수 작업**: FPGA weight 추출(`export_mobileone_info.py`)을 PT2E 그래프 기준으로 재작성, 옛 eager INT8 체크포인트는 호환 불가(재학습 필요).
 
 **완료 기준:** 새 모델 추가만으로 wandb에서 비교 가능(PNG 수작업 불필요), 모든 방식이 동일 PT2E 경로로 INT8 양자화됨.
 

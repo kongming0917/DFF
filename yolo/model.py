@@ -173,7 +173,10 @@ class YOLOLoss(nn.Module):
         return 1 - (iou - center_d2 / enc_d2 - alpha * v)
 
     def forward(self, predictions, targets):
-        """predictions [B, A*6, H, W], targets [B, 4+] (xc, yc, w, h, ...) 정규화."""
+        """predictions [B, A*6, H, W], targets [B, 4+] (xc, yc, w, h, ...) 정규화.
+
+        옛 구현(batch python loop)과 수학적으로 동일하되 batch 전체를 한 번에 계산한다 (vectorized).
+        """
         batch_size, _, grid_h, grid_w = predictions.shape
         num_anchors = len(self.anchors)
         pred = predictions.view(batch_size, num_anchors, 6, grid_h, grid_w).permute(0, 1, 3, 4, 2).contiguous()
@@ -181,7 +184,52 @@ class YOLOLoss(nn.Module):
         gj = (targets[:, 1] * grid_h).long().clamp(0, grid_h - 1)
         anchor_w, anchor_h = self.anchors[0]
         dev = predictions.device
+        bidx = torch.arange(batch_size, device=dev)
 
+        # 첫 anchor, 타깃 cell의 예측만 사용 (옛 코드와 동일)
+        cell = pred[bidx, 0, gj, gi]                       # [B, 6]
+        xy = torch.sigmoid(cell[:, :2])
+        wh = cell[:, 2:4]
+        pred_box = torch.stack([
+            (xy[:, 0] + gi.float()) / grid_w, (xy[:, 1] + gj.float()) / grid_h,
+            torch.exp(wh[:, 0]) * anchor_w, torch.exp(wh[:, 1]) * anchor_h,
+        ], dim=1)                                          # [B, 4]
+        coord_loss = self._ciou_loss_batch(pred_box, targets[:, :4]).sum()
+
+        # objectness: positive 1 cell(BCE, sum) + negative 나머지 cell(BCE, sum) * λ_noobj — batch 전체 합
+        conf = pred[:, 0, :, :, 4]                         # [B, H, W]
+        pos_mask = torch.zeros_like(conf, dtype=torch.bool)
+        pos_mask[bidx, gj, gi] = True
+        obj_loss = (self.bce(conf[pos_mask], torch.ones(batch_size, device=dev))
+                    + self.lambda_noobj * self.bce(conf[~pos_mask], torch.zeros(int((~pos_mask).sum()), device=dev)))
+        return (self.lambda_coord * coord_loss + obj_loss) / batch_size
+
+    @staticmethod
+    def _ciou_loss_batch(p, t):
+        """_ciou_loss의 batch 버전: p, t [B, 4] → [B]."""
+        px1, py1, px2, py2 = p[:, 0] - p[:, 2] / 2, p[:, 1] - p[:, 3] / 2, p[:, 0] + p[:, 2] / 2, p[:, 1] + p[:, 3] / 2
+        tx1, ty1, tx2, ty2 = t[:, 0] - t[:, 2] / 2, t[:, 1] - t[:, 3] / 2, t[:, 0] + t[:, 2] / 2, t[:, 1] + t[:, 3] / 2
+        inter = (torch.clamp(torch.min(px2, tx2) - torch.max(px1, tx1), min=0)
+                 * torch.clamp(torch.min(py2, ty2) - torch.max(py1, ty1), min=0))
+        union = p[:, 2] * p[:, 3] + t[:, 2] * t[:, 3] - inter + 1e-6
+        iou = inter / union
+        center_d2 = (p[:, 0] - t[:, 0]) ** 2 + (p[:, 1] - t[:, 1]) ** 2
+        enc_d2 = ((torch.max(px2, tx2) - torch.min(px1, tx1)) ** 2
+                  + (torch.max(py2, ty2) - torch.min(py1, ty1)) ** 2 + 1e-6)
+        v = (4 / (torch.pi ** 2)) * torch.pow(
+            torch.atan(t[:, 2] / (t[:, 3] + 1e-6)) - torch.atan(p[:, 2] / (p[:, 3] + 1e-6)), 2)
+        alpha = v / (1 - iou + v + 1e-6)
+        return 1 - (iou - center_d2 / enc_d2 - alpha * v)
+
+    def forward_loop(self, predictions, targets):
+        """옛 batch-loop 구현 (검증용 reference). 학습에는 쓰지 않는다."""
+        batch_size, _, grid_h, grid_w = predictions.shape
+        num_anchors = len(self.anchors)
+        pred = predictions.view(batch_size, num_anchors, 6, grid_h, grid_w).permute(0, 1, 3, 4, 2).contiguous()
+        gi = (targets[:, 0] * grid_w).long().clamp(0, grid_w - 1)
+        gj = (targets[:, 1] * grid_h).long().clamp(0, grid_h - 1)
+        anchor_w, anchor_h = self.anchors[0]
+        dev = predictions.device
         coord_loss = torch.zeros((), device=dev)
         obj_loss = torch.zeros((), device=dev)
         for b in range(batch_size):
@@ -191,7 +239,6 @@ class YOLOLoss(nn.Module):
             pred_box = torch.stack([(xy[0] + i.float()) / grid_w, (xy[1] + j.float()) / grid_h,
                                     torch.exp(wh[0]) * anchor_w, torch.exp(wh[1]) * anchor_h])
             coord_loss = coord_loss + self._ciou_loss(pred_box, targets[b, :4])
-
             conf = pred[b, 0, :, :, 4]
             obj_loss = obj_loss + self.bce(conf[j, i].unsqueeze(0), torch.ones(1, device=dev))
             mask = torch.ones(grid_h, grid_w, device=dev, dtype=torch.bool)

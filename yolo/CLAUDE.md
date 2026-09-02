@@ -37,7 +37,8 @@ python tools/evaluate.py --yolo-checkpoint <path>    # 방식 공용 평가/시�
 ## Baseline
 
 옛 체크포인트(500프레임·5 epoch·random split)는 blocked val에서 **93.69px / Acc@5px 1.37%** — 학습 구간 밖
-일반화 실패. 이식 검증: 새 `inference.py`로 같은 값 정확 재현. 재학습 baseline은 루트 `BASELINE.md`.
+일반화 실패. 이식 검증: 새 `inference.py`로 같은 값 정확 재현. CNN 동일 recipe 재학습(`runs/baseline_yolo_tiny/`)은
+**학습 블록 1.07px / val 216px = 과적합** (from-scratch 백본). val loss는 monitor로 부적합(퇴화 상태에서 최소). 상세 `BASELINE.md`.
 
 ## Key Rules
 

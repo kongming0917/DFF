@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""quantization.py: PT2E(Export 기반) QAT 유틸리티 — FPGA INT8 배포용.
+"""PT2E(Export 기반) QAT 유틸리티 — FPGA INT8 배포용. 모든 방식(CNN·YOLO·…)이 이 한 경로를 쓴다.
 
-eager-mode QAT(모델별 QuantStub/fusion 수동 배치)를 **대체**한다. PT2E는 `torch.export`로
+cnn/quantization.py에서 dvslib로 이동 (Phase 2). eager-mode QAT(모델별 QuantStub/fusion 수동 배치)를 **대체**한다. PT2E는 `torch.export`로
 잡은 그래프 위에서 Quantizer가 observer/fake-quant를 자동 삽입하므로:
   - **모델 무관**: mobilenet_v2 / mobileone_s0 동일 경로 (eager는 MobileOne 전용이었음).
   - **Conv-BN fusion 자동**: MobileNetV2의 BatchNorm도 그래프에서 자동 fold (eager는 스킵됨).
@@ -14,9 +14,14 @@ eager-mode QAT(모델별 QuantStub/fusion 수동 배치)를 **대체**한다. PT
   - get_fpga_quantizer : 대칭 INT8 Quantizer (FPGA 정수 누산 모델용)
   - prepare_qat        : 모델 → PT2E QAT 그래프 (fake-quant 삽입, 학습 가능)
   - convert            : QAT 학습 후 → INT8 추론 그래프
+  - set_qat_mode       : exported 그래프의 train/eval 전환 (dvslib 루프의 set_mode 훅)
+  - save_int8 / load_int8 : QAT 결과 저장·복원 (prepared state_dict → 재prepare·convert, 정확 왕복)
+
+※ convert된 INT8 그래프의 단일 파일 저장(torch.save 통째 / torch.export.save .pt2)은 torch 2.5에서 실패한다
+  (GraphModule pickle 재귀 오류, export 시 `train()` 미지원). FPGA weight 추출은 load_int8로 복원한 그래프를 순회한다.
 
 표준 흐름:
-    ex = (torch.randn(1, 5, 512, 512),)          # 그래프 캡처용 예시 입력
+    ex = (torch.randn(2, 5, 512, 512),)          # 그래프 캡처용 예시 입력 (batch≥2 권장, dynamic batch)
     m = get_model("mobileone_s0", input_channels=5)
     m.reparameterize()                            # MobileOne만: multi→single branch
     qat = prepare_qat(m, ex)                      # QAT 준비
@@ -114,3 +119,31 @@ def convert(prepared):
     `module._weight_bias()` 방식과 다름 — `export_mobileone_info.py` 참고).
     """
     return convert_pt2e(prepared)
+
+
+def save_int8(prepared_model, path: str, config: dict = None) -> None:
+    """QAT가 끝난 **prepared(fake-quant) 그래프**의 state_dict를 저장한다.
+
+    convert된 INT8 그래프는 activation scale/zero_point가 그래프 노드의 **상수**로 박혀 state_dict에 없고,
+    GraphModule 통째 pickle은 재귀 오류로 실패한다. 반면 prepared 그래프는 observer 통계·fake-quant 파라미터가
+    모두 state_dict에 있으므로, 복원 시 같은 FP32 모델을 다시 prepare → state_dict 로드 → convert 하면
+    **동일한 INT8 그래프**가 나온다 (검증: 7.1245px 왕복 일치).
+    """
+    torch.save({"model_state_dict": prepared_model.state_dict(), "config": config or {},
+                "format": "pt2e_prepared"}, path)
+
+
+def load_int8(path: str, build_fp32, example_inputs, per_channel: bool = True):
+    """save_int8 산출물 → INT8 그래프 복원.
+
+    build_fp32(): 학습 때와 같은 구조의 FP32 모델(가중치 무관, MobileOne은 reparameterize 후)을 만드는 callable.
+    반환: (int8 GraphModule(eval), config)
+    """
+    ck = torch.load(path, map_location="cpu", weights_only=False)
+    if not (isinstance(ck, dict) and ck.get("format") == "pt2e_prepared"):
+        raise ValueError(f"not a pt2e_prepared checkpoint (save_int8 산출물이 아님): {path}")
+    prepared = prepare_qat(build_fp32().cpu(), example_inputs, per_channel=per_channel)
+    prepared.load_state_dict(ck["model_state_dict"], strict=True)
+    m = convert(prepared)
+    set_qat_mode(m, False)
+    return m, ck.get("config", {})

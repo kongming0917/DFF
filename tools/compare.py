@@ -11,7 +11,8 @@
       --csv filter_kalman=filter/results/no_filter_kalman.csv \\
       --csv filter_median=filter/results/no_filter_median.csv
 
-출력: summary.csv / summary.md (방식별 지표), per_frame.csv (프레임별 오차, 방식별 열), comparison.png
+출력: summary.csv / summary.md (방식별 지표), per_frame.csv (프레임별 오차, 방식별 열).
+--plot 을 주면 comparison.png(CDF·박스플롯·프레임별 오차)도 저장 (기본은 생략 — 용량).
 """
 
 import argparse
@@ -66,6 +67,7 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--name", default=None, help="run 이름 (기본: 날짜시각)")
     ap.add_argument("--out-dir", default=None, help="기본: compare_result/<name>/")
+    ap.add_argument("--plot", action="store_true", help="comparison.png 저장 (기본 생략)")
     ap.add_argument("--wandb", action="store_true")
     ap.add_argument("--wandb-project", default="dvs-laser")
     args = ap.parse_args()
@@ -110,11 +112,14 @@ def main():
               f"samples={len(order)}\n\n")
     with open(os.path.join(out_dir, "summary.md"), "w") as f:
         f.write(header + md + "\n")
-    png = plot_method_comparison(results, os.path.join(out_dir, "comparison.png"),
-                                 title=f"blocked val, {len(order)} frames")
+    png = None
+    if args.plot:
+        png = plot_method_comparison(results, os.path.join(out_dir, "comparison.png"),
+                                     title=f"blocked val, {len(order)} frames")
 
     print(header + md)
-    print(f"\nsaved: {os.path.relpath(out_dir, ROOT)}/ (summary.csv, summary.md, per_frame.csv, comparison.png)")
+    files = "summary.csv, summary.md, per_frame.csv" + (", comparison.png" if png else "")
+    print(f"\nsaved: {os.path.relpath(out_dir, ROOT)}/ ({files})")
 
     if args.wandb:
         from dvslib.tracking.wandb_logger import WandbLogger
@@ -122,7 +127,8 @@ def main():
                              config=dict(max_frames=args.max_frames, split="blocked val", sources=vars(args)),
                              tags=["compare"], enabled=True)
         logger.table("comparison/summary", COLUMNS, summary.values.tolist())
-        logger.image("comparison/plot", png)
+        if png:
+            logger.image("comparison/plot", png)
         logger.finish()
 
 

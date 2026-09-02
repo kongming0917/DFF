@@ -9,7 +9,7 @@
 
   python model_summary.py --model mobileone_s0
   python model_summary.py --model mobilenet_v2 --channels 5
-  python model_summary.py --model mobileone_s0 --int8 checkpoints_mobileone_s0_qat/mobileone_s0_int8.pth
+  python model_summary.py --model mobileone_s0 --int8 runs/qat_mobileone_s0/mobileone_s0_int8.pth
 """
 
 import argparse
@@ -19,11 +19,13 @@ import sys
 import torch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-if HERE not in sys.path:
-    sys.path.insert(0, HERE)
+ROOT = os.path.dirname(HERE)
+for _p in (ROOT, HERE):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from model import get_model, count_parameters
-from quantization import prepare_qat_model, convert_to_quantized
+from dvslib.quant.pt2e import load_int8  # noqa: E402
 
 
 def fmt_bytes(n: float) -> str:
@@ -55,26 +57,29 @@ def torchinfo_summary(model, channels: int) -> None:
 
 
 def verify_int8(model_name: str, channels: int, int8_path: str) -> None:
-    print("\n[INT8 checkpoint load test]")
+    """PT2E INT8 체크포인트(dvslib.quant.pt2e.save_int8 산출물) 복원 검증 — 구조 재구성 후 strict 로드."""
     if not os.path.exists(int8_path):
         print(f"  파일 없음: {int8_path}")
         return
     print(f"  file: {int8_path}  ({fmt_bytes(os.path.getsize(int8_path))})")
-    try:
-        # 저장 시점과 동일한 파이프라인으로 INT8 껍데기를 만든 뒤 가중치 로드
+
+    def build():
         m = get_model(model_name, input_channels=channels, output_dim=2)
         if hasattr(m, "reparameterize"):
             m.reparameterize()
-        m = prepare_qat_model(m)
-        m.eval()
-        m.to("cpu")
-        qm = convert_to_quantized(m)
-        ckpt = torch.load(int8_path, map_location="cpu", weights_only=False)
-        qm.load_state_dict(ckpt["model_state_dict"])
-        print("  load OK — 저장 시점 구조와 일치")
-    except Exception as e:
-        print(f"  load 실패: {e}")
-        print("  (모델 구조 / prepare_qat 설정이 저장 시점과 다를 수 있음)")
+        return m
+
+    try:
+        ck = torch.load(int8_path, map_location="cpu", weights_only=False)
+        per_channel = bool(ck.get("config", {}).get("per_channel", True)) if isinstance(ck, dict) else True
+        qm, cfg = load_int8(int8_path, build, (torch.randn(2, channels, 512, 512),), per_channel=per_channel)
+        n_q = sum(1 for n in qm.graph.nodes if "quantize_per" in str(n.target))
+        print(f"  ✅ PT2E INT8 그래프 복원 OK  (quant/dequant 노드 {n_q}개)")
+        if cfg:
+            keys = ("int8_pixel_error_mean", "int8_accuracy_5px", "per_channel", "qat_epochs")
+            print("  config:", {k: cfg[k] for k in keys if k in cfg})
+    except Exception as e:  # noqa: BLE001
+        print(f"  ❌ 복원 실패: {type(e).__name__}: {e}")
 
 
 def analyze(model_name: str, channels: int = 5, int8_path: str = None) -> None:

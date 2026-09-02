@@ -121,7 +121,7 @@ python tools/plot_error_vs_frame.py --checkpoint cnn/runs/baseline_mobilenet_v2/
 python tools/save_max_error_frame.py --pred-csv filter/results/no_filter_kalman.csv
 python tools/compare.py --cnn mobilenet_v2=cnn/runs/baseline_mobilenet_v2/mobilenet_v2_best.pth \
     --yolo yolo_tiny=yolo/runs/baseline_yolo_tiny/yolo_tiny_best.pth \
-    --csv filter_kalman=filter/results/no_filter_kalman.csv      # blocked val 동일 프레임 비교 → compare_result/<run>/ (+ --wandb)
+    --csv filter_kalman=filter/results/no_filter_kalman.csv      # blocked val 동일 프레임 비교 → compare_result/<run>/ (+ --plot PNG, --wandb)
 python tools/inspect_bin.py data/gaussian_large.bin       # bin 구조·이벤트 통계
 python tools/generate_brownian_dataset.py --help          # 데이터셋 생성 (보통 재실행 불필요)
 ```
@@ -138,7 +138,7 @@ python tools/generate_brownian_dataset.py --help          # 데이터셋 생성 
 | CNN | 높음 | 중간 | 보통 | 높음 |
 | YOLO | 중간 | 높음 | 어려움 | 높음 |
 
-검증된 정량 baseline은 [BASELINE.md](BASELINE.md)에 정리돼 있습니다. 세 방식을 동일 split·지표로 비교하려면 `tools/compare.py`를 쓰며, 결과는 `compare_result/<run>/`에 CSV·markdown·PNG로 남고 `--wandb`로 wandb Table에도 올릴 수 있습니다.
+검증된 정량 baseline은 [BASELINE.md](BASELINE.md)에 정리돼 있습니다. 세 방식을 동일 split·지표로 비교하려면 `tools/compare.py`를 쓰며, 결과는 `compare_result/<run>/`에 CSV·markdown으로 남고, `--plot`이면 PNG도, `--wandb`면 wandb Table에도 올립니다.
 
 ## Dependencies
 

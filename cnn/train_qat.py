@@ -4,7 +4,7 @@
 학습된 FP32 체크포인트 → reparam → PT2E QAT fine-tune → INT8 정확도 측정 → INT8 그래프 저장.
 
 PT2E exported 모델은 `.train()/.eval()`을 못 쓰므로, dvslib trainer/evaluator에
-`set_mode=quantization.set_qat_mode` 훅을 주입해 **공유 loop를 그대로 재사용**한다 (A2).
+`set_mode=set_qat_mode` 훅을 주입해 **공유 loop를 그대로 재사용**한다. 양자화 코드는 `dvslib.quant.pt2e`.
 정확도는 fine-tune된 그래프(fake-quant)로 측정 — INT8 시뮬레이션이라 변환 모델과 동등하고,
 PT2E INT8 op의 CUDA 미지원 문제를 피한다. convert된 INT8 그래프는 export/배포용.
 
@@ -22,13 +22,13 @@ sys.path.insert(0, HERE)   # local model.py
 
 import torch  # noqa: E402
 
-from dvslib.data.dataset import load_frames_from_bin   # noqa: E402
+from dvslib.data.dataset import load_frames_from_bin, parse_roi, brownian_paths  # noqa: E402
 from dvslib.data.split import make_train_val_loaders    # noqa: E402
 from dvslib.eval.evaluate import evaluate_regression     # noqa: E402
 from dvslib.training.loop import RegressionTrainer        # noqa: E402
 from dvslib.training.seed import seed_everything          # noqa: E402
+from dvslib.quant.pt2e import prepare_qat, convert, set_qat_mode, save_int8  # noqa: E402
 from model import get_model                               # noqa: E402
-from quantization import prepare_qat, convert, set_qat_mode  # noqa: E402
 
 DATA = os.path.join(ROOT, "data")
 
@@ -53,18 +53,14 @@ def main():
     cfg = ck.get("config", {}) if isinstance(ck, dict) else {}
     model_name = cfg.get("model", "mobileone_s0")
     tw = cfg.get("temporal_window", 5)
-    roi_n = cfg.get("roi", 512)
-    roi = (roi_n, roi_n)
+    roi = parse_roi(cfg.get("roi", 512))
     max_frames = args.max_frames if args.max_frames is not None else cfg.get("max_frames", 3000)
     save_dir = args.save_dir or os.path.join(HERE, "runs", f"qat_{model_name}")
 
-    frames = load_frames_from_bin(
-        os.path.join(DATA, f"gaussian_brownian_{roi_n}x{roi_n}.bin"),
-        max_frames=max_frames, height=roi_n, width=roi_n,
-    )
+    bin_path, csv_path = brownian_paths(DATA, roi)
+    frames = load_frames_from_bin(bin_path, max_frames=max_frames, height=roi[0], width=roi[1])
     train_loader, val_loader = make_train_val_loaders(
-        frames, os.path.join(DATA, f"gaussian_brownian_{roi_n}x{roi_n}_labels.csv"),
-        batch_size=args.batch_size, temporal_window=tw, roi_size=roi,
+        frames, csv_path, batch_size=args.batch_size, temporal_window=tw, roi_size=roi,
     )
 
     def build_fp32():
@@ -80,7 +76,7 @@ def main():
     print(f"[FP32]        pixel_err={fp32['pixel_error_mean']:.4f}px  acc5={fp32['accuracy_5px']:.2f}%")
 
     # 2) PT2E QAT prepare (CPU 캡처) → 공유 trainer로 fine-tune (set_mode 훅 주입)
-    example = (torch.randn(2, tw, roi_n, roi_n),)
+    example = (torch.randn(2, tw, roi[0], roi[1]),)
     prepared = prepare_qat(build_fp32().cpu(), example, per_channel=args.per_channel)
     qcfg = {**cfg, "qat": True, "qat_lr": args.qat_lr, "qat_epochs": args.qat_epochs,
             "per_channel": args.per_channel}
@@ -103,11 +99,11 @@ def main():
     print(f"[QAT INT8]    pixel_err={qat['pixel_error_mean']:.4f}px  acc5={qat['accuracy_5px']:.2f}%  "
           f"(Δ {d:+.4f}px vs FP32; converted, cpu)")
 
-    # 4) INT8 그래프 저장 (export/배포용)
+    # 4) 저장: prepared(fake-quant) state_dict — load_int8이 재prepare·convert로 동일 INT8 그래프를 복원
     int8_path = os.path.join(save_dir, f"{model_name}_int8.pth")
-    torch.save(int8.state_dict(), int8_path)
-    print(f"  INT8 그래프 저장 -> {os.path.relpath(int8_path, ROOT)}")
-
+    save_int8(prepared, int8_path, config={**qcfg, "int8_pixel_error_mean": qat["pixel_error_mean"],
+                                           "int8_accuracy_5px": qat["accuracy_5px"]})
+    print(f"  저장 -> {os.path.relpath(int8_path, ROOT)} (prepared state_dict; 복원은 dvslib.quant.pt2e.load_int8)")
 
 if __name__ == "__main__":
     main()

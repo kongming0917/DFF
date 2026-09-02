@@ -8,5 +8,6 @@ Subpackages:
     models    shared model components, model registry
     training  train loop, EarlyStopping, Checkpoint, MetricsTracker
     tracking  wandb logging wrapper
-    eval      metrics (pixel error, Acc@Npx, FPS), cross-method comparison
+    eval      metrics (pixel error, Acc@Npx, FPS), visualize, cross-method comparison
+    quant     PT2E QAT (prepare/convert/set_qat_mode, INT8 save/load) — FPGA INT8 one path
 """
