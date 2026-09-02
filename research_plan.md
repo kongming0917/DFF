@@ -83,7 +83,7 @@ archive/                                            # fixed-GT 구버전 (이동
 - [x] 720×960 비정사각 ROI: **지원 추가** — `--roi 720x960`(HxW) 파싱을 `dvslib.data.dataset.parse_roi`로 일원화, train/inference 모두 적용. 옛 720×960 체크포인트 로드·평가 동작 확인(단, 그 체크포인트는 pre-blocked 학습이라 수치는 참고용)
 - [x] 위 완료 후 `cnn_brownian_sim` 삭제, `CLAUDE.md`·`README.md` Directory Map 갱신(`tools/` 추가, `cnn_brownian_sim` 제거)
 
-**완료 기준:** 세 방식 모두 통합 구조에서 동작하고, 각자 Phase 0 baseline 지표를 오차 범위 내 재현. 중복 코드 대폭 감소. → **달성** (2026-09-02). 남은 것: YOLO 재학습 결과 기록, `compare_brownian.py`의 순차 100f 비교를 Phase 2 wandb 비교로 대체.
+**완료 기준:** 세 방식 모두 통합 구조에서 동작하고, 각자 Phase 0 baseline 지표를 오차 범위 내 재현. 중복 코드 대폭 감소. → **달성** (2026-09-02). 남은 것: YOLO 재학습 결과 기록.
 
 ### 1-5. CNN 파이프라인 품질 감사 (code review)
 
@@ -99,10 +99,10 @@ archive/                                            # fixed-GT 구버전 (이동
 
 ## Phase 2 — Experiment Tracking (wandb) + Quantization 통일
 
-- [ ] `dvslib/tracking`에 wandb 래퍼 (config·metric·모델 아티팩트 로깅)
+- [x] `dvslib/tracking`에 wandb 래퍼 (config·metric·Table·이미지). 모델 아티팩트 로깅은 미구현
 - [ ] 학습 시 epoch별 loss/지표, 검증 예측 시각화 자동 로깅
-- [ ] `compare.py` / `compare_brownian.py`를 wandb Table/Report 기반 정량 비교로 교체 (PNG 의존 제거)
-- [ ] 3가지 방식을 동일 split·지표로 한 번에 비교하는 스크립트
+- [x] `compare_brownian.py`(처음 100f 순차 = 학습 구간, PNG만) 삭제 → `tools/compare.py`: blocked val 동일 프레임(1098) 비교, summary.csv/md + per_frame.csv + 3패널 PNG 로컬 저장, `--wandb`면 Table 기록
+- [x] 3가지 방식을 동일 split·지표로 한 번에 비교하는 스크립트 (`tools/compare.py`, 소스 몇 개든 `--cnn/--yolo/--csv NAME=PATH`)
 - [~] **QAT를 PT2E 기반으로 통일 (eager 대체).** `cnn/quantization.py`·`cnn/train_qat.py`가 PT2E로 재작성됨(진행 중 — `dvslib/quant`로의 이동, `export_mobileone_info.py` PT2E 대응은 남음). 옛 eager 코드는 **MobileOne 전용**(MobileNetV2는 QuantStub 부재·fusion 스킵으로 QAT 불가)이고 `reduce_range` 등 x86 잔재가 박혀 있음. PT2E(`capture_pre_autograd_graph` + Quantizer)는 **모델 무관**으로 observer/fake-quant·Conv-BN fusion을 그래프에서 자동 처리 → CNN(mobilenet_v2/mobileone_s0)·YOLO·EventTransformer에 동일 적용. FPGA 제약(대칭 INT8, 향후 PoT·bit-width)은 Quantizer 한 곳에 기술. **부수 작업**: FPGA weight 추출(`export_mobileone_info.py`)을 PT2E 그래프 기준으로 재작성, 옛 eager INT8 체크포인트는 호환 불가(재학습 필요).
 
 **완료 기준:** 새 모델 추가만으로 wandb에서 비교 가능(PNG 수작업 불필요), 모든 방식이 동일 PT2E 경로로 INT8 양자화됨.

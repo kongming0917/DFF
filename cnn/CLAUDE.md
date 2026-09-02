@@ -57,5 +57,5 @@ QAT 산출물: `runs/qat_mobileone_s0_pretrained/` (`*_int8.pth`).
 - MobileOne 평가·배포는 항상 **reparameterize 후**(single-branch). `inference.py`가 load 후 자동 수행.
 - QAT는 **PT2E(`torch.export`) 기반**만 사용. eager QAT(QuantStub/fusion 수동 배치)는 폐기됐으므로 되살리지 말 것. PT2E 그래프는 `.train()/.eval()`을 못 쓰므로 dvslib 루프에 `set_qat_mode` 훅을 주입해 재사용한다. FPGA 제약(대칭 INT8)은 `get_fpga_quantizer` 한 곳에만 기술.
 - `checkpoints_*/`의 옛 INT8 체크포인트는 eager 기반이라 PT2E 경로와 호환되지 않음 (재학습 필요). 옛 FP32 체크포인트(720×960 포함)는 `inference.py --checkpoint <path> --model <name> --roi <HxW>`로 재평가 가능.
-- 오차 시각화·방식 비교는 여기 두지 않는다 — `tools/plot_error_vs_frame.py`, `tools/save_max_error_frame.py`, `tools/compare_brownian.py` (계산은 `dvslib/eval`).
+- 오차 시각화·방식 비교는 여기 두지 않는다 — `tools/plot_error_vs_frame.py`, `tools/save_max_error_frame.py`, `tools/compare.py` (계산은 `dvslib/eval`).
 - 향후 작업: `quantization.py`를 `dvslib/quant`로 이동, `export_mobileone_info.py` PT2E 그래프 대응 (루트 `research_plan.md` Phase 2).

@@ -32,6 +32,7 @@ fpga_export/
 */fpga_export/
 
 # 결과 폴더 (선택적 - 필요시 주석 해제)
+compare_result/
 results/
 */results/
 analysis_results/

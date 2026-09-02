@@ -102,3 +102,51 @@ def save_max_error_frame(
         title = f"{label}: " + title
     save_frame_overlay(frames[fi], tuple(targets_px[i]), tuple(predictions_px[i]), out_path, title)
     return out_path, fi, float(errors[i])
+
+
+def plot_method_comparison(
+    results: "dict[str, dict]",
+    out_path: str,
+    title: str = "",
+) -> str:
+    """여러 방식의 프레임별 픽셀 오차를 한 그림에 비교 — CDF · 박스플롯 · 프레임별 오차.
+
+    results: {이름: {"frame_idx": (N,), "pixel_errors": (N,)}} — 같은 프레임 집합이어야 의미가 있다 (호출자가 정렬).
+    옛 6패널 비교에서 판단에 쓰이는 세 패널만 남겼다.
+    """
+    names = list(results)
+    fig, (ax_cdf, ax_box, ax_t) = plt.subplots(1, 3, figsize=(18, 5))
+
+    for name in names:
+        e = np.sort(np.asarray(results[name]["pixel_errors"], dtype=np.float64))
+        ax_cdf.plot(e, np.arange(1, len(e) + 1) / len(e), label=f"{name} ({e.mean():.2f}px)")
+    for t in (5, 10):
+        ax_cdf.axvline(t, color="gray", linestyle=":", linewidth=1)
+    ax_cdf.set_xlabel("Pixel error"); ax_cdf.set_ylabel("Cumulative fraction")
+    ax_cdf.set_title("Error CDF (dotted: 5px, 10px)"); ax_cdf.set_xscale("symlog", linthresh=10)
+    ax_cdf.set_xlim(left=0); ax_cdf.grid(True, alpha=0.3); ax_cdf.legend()
+
+    ax_box.boxplot([np.asarray(results[n]["pixel_errors"]) for n in names], labels=names, showfliers=True,
+                   flierprops=dict(marker=".", markersize=3, alpha=0.4))
+    ax_box.set_ylabel("Pixel error"); ax_box.set_title("Error distribution"); ax_box.set_yscale("symlog", linthresh=10)
+    ax_box.grid(True, alpha=0.3, axis="y")
+
+    for name in names:
+        r = results[name]
+        fi = np.asarray(r["frame_idx"], dtype=np.float64)
+        pe = np.asarray(r["pixel_errors"], dtype=np.float64)
+        # 블록 사이 빈 구간(연속되지 않는 프레임)은 NaN으로 끊어 선이 이어지지 않게 한다
+        gaps = np.where(np.diff(fi) > 1)[0]
+        fi = np.insert(fi, gaps + 1, np.nan)
+        pe = np.insert(pe, gaps + 1, np.nan)
+        ax_t.plot(fi, pe, linewidth=0.8, alpha=0.8, label=name)
+    ax_t.set_xlabel("Center frame index"); ax_t.set_ylabel("Pixel error"); ax_t.set_yscale("symlog", linthresh=10)
+    ax_t.set_title("Error vs frame"); ax_t.grid(True, alpha=0.3); ax_t.legend()
+
+    if title:
+        fig.suptitle(title)
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out_path

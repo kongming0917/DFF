@@ -17,6 +17,7 @@ conda env create -f environment.yml && conda activate dvs_project
 python cnn/train.py --model mobilenet_v2 --epochs 50 --wandb
 python cnn/inference.py                    # baseline checkpoint 평가
 python tools/evaluate.py --checkpoint <best.pth>   # 방식 공용 평가 (--yolo-checkpoint / --pred-csv 도 가능)
+python tools/compare.py --cnn a=<ckpt> --yolo b=<ckpt> --csv c=<csv>   # 방식 간 비교 → compare_result/<run>/
 python tools/plot_error_vs_frame.py --checkpoint <best.pth>   # 방식 공용 분석 도구 (tools/)
 python cnn/train_qat.py --checkpoint cnn/runs/baseline_mobileone_s0_pretrained/mobileone_s0_best.pth   # PT2E QAT → INT8
 
@@ -41,7 +42,7 @@ python tools/evaluate.py --pred-csv filter/results/no_filter_kalman.csv --split 
 | `cnn/` | **CNN 회귀 (주력)** — dvslib 기반 thin experiment. MobileNetV2 / MobileOne S0 + PT2E QAT(`train_qat.py`). `cnn_brownian_v2`에서 rename. 자체 `CLAUDE.md` |
 | `yolo/` | **YOLOv3-Tiny 검출** — dvslib 기반 thin experiment. 데이터셋은 CNN과 동일, bbox 타깃·decode는 `model.py`의 hook(`YOLOCriterion`·`YOLOCenterDecoder`). 자체 `CLAUDE.md` |
 | `filter/` | **필터 휴리스틱** (학습 없음) — `dvs_filter.py`(필터·추출기 본체, GT 원점 측정 도구이기도 함)·`run.py`(CSV 생성)·`origin.py`(정지 레이저 원점 후보). 자체 `CLAUDE.md` |
-| `tools/` | 방식 공용 명령줄 도구 — `evaluate.py`(baseline·회귀 검증), 오차 시각화, 3방식 비교, 데이터셋 생성, bin 검사. 예측 얻기는 `_common.py`(cnn/yolo/csv), 계산은 dvslib |
+| `tools/` | 방식 공용 명령줄 도구 — `evaluate.py`(단일 소스 지표), `compare.py`(여러 소스를 blocked val 동일 프레임에서 비교, 로컬 CSV/MD/PNG + 선택적 wandb Table), 오차 시각화, 데이터셋 생성, bin 검사. 예측 얻기는 `_common.py`(cnn/yolo/csv), 계산은 dvslib |
 | `archive/` | fixed-GT 1세대 — `cnn_sim`·`filter_sim`·`yolo_sim` |
 | `eventrans/` | EventTransformer (Phase 3, 예정) |
 
@@ -58,4 +59,5 @@ python tools/evaluate.py --pred-csv filter/results/no_filter_kalman.csv --split 
 - differentiable logic network 분기(`birel`, `cnn_diff`/LogicDVSNet)는 **삭제됨**. 관련 코드·의존성을 다시 추가하지 말 것.
 - ROI는 `--roi 512`(정사각) 또는 `--roi 720x960`(HxW) — 파싱은 `dvslib.data.dataset.parse_roi` 한 곳. 데이터 경로는 `brownian_paths`로 결정.
 - 분석·시각화 로직은 `dvslib/eval/visualize.py`에 함수로 두고, 방식별 진입점은 `tools/`에 얇게(예측 얻기만 `tools/_common.py`). 방식 디렉토리 안에 시각화 스크립트를 새로 만들지 말 것.
+- 방식 간 성능 비교는 **항상 blocked val 동일 프레임 집합**(`tools/compare.py`)에서. 처음 N프레임 순차 비교는 학습 구간이라 무효 (옛 `compare_brownian.py`는 이 이유로 삭제됨).
 - `.bin`·체크포인트·로그·이미지는 gitignore 대상이라 커밋되지 않습니다.

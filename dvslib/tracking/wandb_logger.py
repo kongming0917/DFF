@@ -34,6 +34,15 @@ class WandbLogger:
         if self.run:
             self.wandb.summary.update(data)
 
+    def table(self, name: str, columns: Sequence[str], rows: Sequence[Sequence]) -> None:
+        """비교표를 wandb Table로 기록 (Phase 2: PNG 대신 정량 비교)."""
+        if self.run:
+            self.wandb.log({name: self.wandb.Table(columns=list(columns), data=[list(r) for r in rows])})
+
+    def image(self, name: str, path: str) -> None:
+        if self.run:
+            self.wandb.log({name: self.wandb.Image(path)})
+
     def finish(self) -> None:
         if self.run:
             self.run.finish()

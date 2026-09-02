@@ -17,7 +17,7 @@ dvs/sim/
 ├── yolo/                    # YOLOv3-Tiny 검출 — dvslib 기반 (CNN과 동일 데이터셋·split·recipe)
 ├── filter/                  # 필터 휴리스틱 (학습 없음) — dvslib 기반, GT 원점 측정 도구 겸용
 ├── eventrans/               # EventTransformer (Phase 3, 예정)
-├── tools/                   # 방식 공용 CLI — 데이터셋 생성·bin 검사·오차 시각화·3방식 비교
+├── tools/                   # 방식 공용 CLI — evaluate/compare(blocked val 비교)·오차 시각화·데이터셋 생성·bin 검사
 ├── archive/                 # fixed-GT 1세대 — {filter,cnn,yolo}_sim
 └── data/                    # DVS 센서 데이터 (.bin, 레이블 CSV)
 ```
@@ -119,7 +119,9 @@ python tools/evaluate.py --checkpoint cnn/runs/baseline_mobilenet_v2/mobilenet_v
 python tools/evaluate.py --yolo-checkpoint yolo/runs/baseline_yolo_tiny/yolo_tiny_best.pth
 python tools/plot_error_vs_frame.py --checkpoint cnn/runs/baseline_mobilenet_v2/mobilenet_v2_best.pth
 python tools/save_max_error_frame.py --pred-csv filter/results/no_filter_kalman.csv
-python tools/compare_brownian.py --max-frames 100        # CNN vs YOLO vs Filter (순차 window, PNG)
+python tools/compare.py --cnn mobilenet_v2=cnn/runs/baseline_mobilenet_v2/mobilenet_v2_best.pth \
+    --yolo yolo_tiny=yolo/runs/baseline_yolo_tiny/yolo_tiny_best.pth \
+    --csv filter_kalman=filter/results/no_filter_kalman.csv      # blocked val 동일 프레임 비교 → compare_result/<run>/ (+ --wandb)
 python tools/inspect_bin.py data/gaussian_large.bin       # bin 구조·이벤트 통계
 python tools/generate_brownian_dataset.py --help          # 데이터셋 생성 (보통 재실행 불필요)
 ```
@@ -136,7 +138,7 @@ python tools/generate_brownian_dataset.py --help          # 데이터셋 생성 
 | CNN | 높음 | 중간 | 보통 | 높음 |
 | YOLO | 중간 | 높음 | 어려움 | 높음 |
 
-검증된 정량 baseline(재현 확인된 CNN 2.62px 등)은 [BASELINE.md](BASELINE.md)에 정리돼 있습니다. 세 방식을 동일 split·지표로 묶는 정량 비교(wandb)는 Phase 2 작업입니다 ([research_plan.md](research_plan.md)).
+검증된 정량 baseline은 [BASELINE.md](BASELINE.md)에 정리돼 있습니다. 세 방식을 동일 split·지표로 비교하려면 `tools/compare.py`를 쓰며, 결과는 `compare_result/<run>/`에 CSV·markdown·PNG로 남고 `--wandb`로 wandb Table에도 올릴 수 있습니다.
 
 ## Dependencies
 
