@@ -2,7 +2,7 @@
 """최대 오차 프레임에 GT(+)·예측(x)을 겹쳐 저장 — 어떤 프레임에서 실패하는지 본다 (방식 공용).
 
   python tools/save_max_error_frame.py --checkpoint cnn/runs/baseline_mobilenet_v2/mobilenet_v2_best.pth
-  python tools/save_max_error_frame.py --pred-csv filter_brownian_sim/csv_results/spatial_filter_kalman.csv
+  python tools/save_max_error_frame.py --pred-csv filter/results/no_filter_kalman.csv
 """
 
 import argparse

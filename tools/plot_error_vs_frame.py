@@ -2,7 +2,7 @@
 """프레임 인덱스에 따른 픽셀 오차 그래프 — 어느 구간에서 오차가 커지는지 본다 (방식 공용).
 
   python tools/plot_error_vs_frame.py --checkpoint cnn/runs/baseline_mobilenet_v2/mobilenet_v2_best.pth
-  python tools/plot_error_vs_frame.py --pred-csv filter_brownian_sim/csv_results/spatial_filter_kalman.csv
+  python tools/plot_error_vs_frame.py --pred-csv filter/results/no_filter_kalman.csv
 """
 
 import argparse

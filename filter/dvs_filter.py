@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-DVS bin 파일 프레임 단위 처리 및 필터링 프레임워크
+DVS 프레임 필터·중심점 추출기 (filter 방식의 알고리즘 본체)
 
-이 모듈은 DVS 센서에서 생성된 bin 파일을 프레임 단위로 읽어서
-2bit 데이터에 직접 다양한 필터를 적용할 수 있는 프레임워크를 제공합니다.
+옛 filter_brownian_sim/dvs_filter.py에서 **동작 변경 없이** 이관 (bin I/O만 dvslib.data 사용).
+이 방식은 비교 대상이면서 동시에 GT 원점을 재는 측정 도구이므로(데이터셋의 initial_center (541, 361)는
+정지 레이저에서 여러 추출기 결과를 보고 수동으로 정한 값), 알고리즘을 바꾸면 GT 근거가 달라진다 — 수정 시 주의.
 """
 
 import numpy as np
@@ -15,13 +16,12 @@ import os
 import sys
 from typing import List, Tuple, Optional, Dict, Any
 
-# 상위 디렉토리를 sys.path에 추가 (lib 모듈 사용을 위해)
-dvs_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if dvs_root not in sys.path:
-    sys.path.insert(0, dvs_root)
+# dvslib(공통 패키지) import — lib/ shim 대신 single source를 직접 사용
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
-# 공통 라이브러리에서 import
-from lib.bin_processor import FrameHeader, ProcessingStats, DVSFrame, BinProcessor
+from dvslib.data import FrameHeader, ProcessingStats, DVSFrame, BinProcessor  # noqa: E402
 
 class FrameFilter(ABC):
     """프레임 필터 추상 클래스"""

@@ -3,8 +3,8 @@
 CNN vs YOLO vs Filter 비교 스크립트 (Brownian Motion 데이터셋)
 
 - CNN   : cnn/ 체크포인트를 dvslib 파이프라인으로 추론 (tools/_common.cnn_predict)
-- YOLO  : yolo_brownian_sim (옛 layout, dvslib 이식 전) 추론
-- Filter: filter_brownian_sim/csv_results CSV
+- YOLO  : yolo/ 체크포인트를 dvslib 파이프라인으로 추론 (tools/_common.yolo_predict)
+- Filter: filter/results CSV (filter/run.py 출력)
 세 방식 모두 처음 --max-frames 프레임의 순차 sliding window를 사용한다 (옛 동작 유지).
 blocked split 기반 정량 비교는 Phase 2(wandb)에서 대체 예정.
 
@@ -23,15 +23,7 @@ import pandas as pd
 import seaborn as sns
 import torch
 
-from _common import ROOT, DATA, cnn_predict  # noqa: E402  (tools/ 안에서 실행)
-
-for _d in ("filter_brownian_sim", "yolo_brownian_sim"):
-    _p = os.path.join(ROOT, _d)
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-from yolo_brownian_sim.inference import LaserYOLOInference  # noqa: E402
-from yolo_brownian_sim.dataset import load_frames_from_bin as yolo_load_frames  # noqa: E402
+from _common import ROOT, DATA, cnn_predict, yolo_predict  # noqa: E402  (tools/ 안에서 실행)
 
 
 def load_ground_truth(csv_path: str) -> pd.DataFrame:
@@ -60,190 +52,22 @@ def load_cnn_predictions(checkpoint_path: str, max_frames: int = 100, device: st
     }
 
 
-def load_yolo_predictions(
-    checkpoint_path: str,
-    bin_file_path: str,
-    csv_labels_path: str,
-    max_frames: int = 50,
-    conf_threshold: float = 0.5
-) -> Dict:
-    """YOLO 모델의 추론 결과 로드"""
+def load_yolo_predictions(checkpoint_path: str, max_frames: int = 100, conf_threshold: float = 0.6,
+                          device: str = "cuda") -> Dict:
+    """YOLO 추론 결과 (ROI 내부 픽셀 좌표). dvslib 파이프라인 사용, 처음 max_frames의 순차 window."""
     print("🎯 Loading YOLO predictions...")
-    
-    # YOLO Inference 객체 생성
-    inferencer = LaserYOLOInference(checkpoint_path)
-    
-    # 프레임 로드 (512x512 ROI)
-    individual_frames = yolo_load_frames(bin_file_path, max_frames=max_frames)
-    
-    # 데이터셋 생성 (Brownian motion용)
-    from yolo_brownian_sim.dataset import LaserYOLOBrownianDataset
-    from yolo_brownian_sim.model import decode_predictions, get_laser_center
-    
-    dataset = LaserYOLOBrownianDataset(
-        individual_frames=individual_frames,
-        csv_labels_path=csv_labels_path,
-        laser_diameter=400,
-        roi_size=(512, 512),
-        temporal_window=5
-    )
-    dataset.set_training_mode(False)
-    
-    # 추론 실행
-    predictions_rel = []
-    targets_rel = []
-    detection_status = []  # YOLO 감지 성공/실패 기록
-    frame_info = []  # 각 샘플의 프레임 인덱스 정보
-    
-    print(f"   Dataset length: {len(dataset)} samples")
-    print(f"   Temporal window: 5")
-    print(f"   Last sample idx: {len(dataset)-1}")
-    print(f"   Last sample uses frames: {len(dataset)-1} to {len(dataset)-1 + 4}")
-    
-    with torch.no_grad():
-        for idx in range(len(dataset)):
-            image, target = dataset[idx]
-            image = image.unsqueeze(0).to(inferencer.device)
-            
-            # 정답 저장 (bbox 중심점)
-            targets_rel.append((target[0].item(), target[1].item()))
-            
-            # Temporal window 프레임 정보 확인
-            # 실제 dataset의 __getitem__에서 사용하는 frame_indices 계산
-            frame_indices = list(range(idx, idx + 5))  # temporal_window=5
-            center_frame_idx = frame_indices[2]  # 중앙 프레임 (idx + temporal_window//2)
-            frame_info.append({
-                'sample_idx': idx,
-                'center_frame_idx': center_frame_idx,
-                'frame_range': (frame_indices[0], frame_indices[-1]),
-                'all_frames_valid': all(f < len(individual_frames) for f in frame_indices)
-            })
-            
-            # 예측
-            output = inferencer.model(image)
-            boxes_list, scores_list = decode_predictions(
-                output, inferencer.anchors, conf_threshold=conf_threshold
-            )
-            
-            # 중심점 추출
-            detection_success = False
-            detected_boxes_info = None
-            if len(boxes_list[0]) > 0:
-                center = get_laser_center(boxes_list[0], scores_list[0])
-                if center:
-                    predictions_rel.append((center[0], center[1]))
-                    detection_success = True
-                    # 디버그: 감지된 모든 박스 정보 저장 (특히 70-85 범위)
-                    if 70 <= idx <= 85:
-                        detected_boxes_info = {
-                            'num_boxes': len(boxes_list[0]),
-                            'all_boxes': boxes_list[0].cpu().numpy(),
-                            'all_scores': scores_list[0].cpu().numpy(),
-                            'selected_center': center,
-                            'selected_idx': torch.argmax(scores_list[0]).item()
-                        }
-                else:
-                    # 실패 시 이전 프레임 값 사용
-                    if len(predictions_rel) > 0:
-                        predictions_rel.append(predictions_rel[-1])
-                    else:
-                        predictions_rel.append((0.5, 0.5))  # 첫 프레임 실패 시 ROI 중심
-                    detection_success = False
-            else:
-                # 실패 시 이전 프레임 값 사용
-                if len(predictions_rel) > 0:
-                    predictions_rel.append(predictions_rel[-1])
-                else:
-                    predictions_rel.append((0.5, 0.5))  # 첫 프레임 실패 시 ROI 중심
-                detection_success = False
-            
-            detection_status.append({
-                'sample_idx': idx,
-                'detection_success': detection_success,
-                'used_previous': not detection_success and len(predictions_rel) > 1,
-                'boxes_info': detected_boxes_info
-            })
-    
-    # 정규화 좌표(0-1)를 ROI 내부 절대 좌표로 변환
-    roi_size = 512
-    predictions_abs = np.array(predictions_rel) * roi_size
-    targets_abs = np.array(targets_rel) * roi_size
-    
-    # 오차 계산
-    errors = np.sqrt(np.sum((predictions_abs - targets_abs)**2, axis=1))
-    mean_error = np.mean(errors)
-    std_error = np.std(errors)
-    
-    # 마지막 10개 샘플 상세 분석
-    print(f"\n🔍 Analyzing last 10 samples:")
-    last_n = min(10, len(errors))
-    for i in range(len(errors) - last_n, len(errors)):
-        status = detection_status[i]
-        info = frame_info[i]
-        error = errors[i]
-        pred = predictions_abs[i]
-        target = targets_abs[i]
-        print(f"   Sample {i:3d}: Error={error:6.2f}px, "
-              f"CenterFrame={info['center_frame_idx']:3d}, "
-              f"Detected={status['detection_success']}, "
-              f"Pred=({pred[0]:6.1f},{pred[1]:6.1f}), "
-              f"GT=({target[0]:6.1f},{target[1]:6.1f})")
-    
-    # 오류 급증 지점 찾기
-    error_threshold = np.mean(errors) + 3 * np.std(errors)  # 평균 + 3*표준편차
-    spike_indices = np.where(errors > error_threshold)[0]
-    if len(spike_indices) > 0:
-        print(f"\n⚠️  Error spikes detected (>{error_threshold:.1f}px):")
-        for spike_idx in spike_indices:
-            status = detection_status[spike_idx]
-            info = frame_info[spike_idx]
-            error = errors[spike_idx]
-            pred = predictions_abs[spike_idx]
-            target = targets_abs[spike_idx]
-            print(f"   Sample {spike_idx:3d}: Error={error:6.2f}px, "
-                  f"CenterFrame={info['center_frame_idx']:3d}, "
-                  f"Detected={status['detection_success']}, "
-                  f"UsedPrevious={status.get('used_previous', False)}")
-            print(f"      Pred=({pred[0]:6.1f},{pred[1]:6.1f}), "
-                  f"GT=({target[0]:6.1f},{target[1]:6.1f}), "
-                  f"Diff=({target[0]-pred[0]:6.1f},{target[1]-pred[1]:6.1f})")
-    
-    # 70-85 범위 샘플들 상세 분석 (오류 급증 구간)
-    print(f"\n🔍 Detailed analysis of samples 70-85 (error spike region):")
-    for i in range(70, min(86, len(errors))):
-        status = detection_status[i]
-        info = frame_info[i]
-        error = errors[i]
-        pred = predictions_abs[i]
-        target = targets_abs[i]
-        print(f"   Sample {i:3d}: Error={error:6.2f}px, "
-              f"CenterFrame={info['center_frame_idx']:3d}, "
-              f"Frames={info['frame_range'][0]}-{info['frame_range'][1]}, "
-              f"AllValid={info['all_frames_valid']}, "
-              f"Detected={status['detection_success']}, "
-              f"Pred=({pred[0]:6.1f},{pred[1]:6.1f}), "
-              f"GT=({target[0]:6.1f},{target[1]:6.1f})")
-        
-        # 오류가 큰 샘플의 박스 정보 출력
-        if status.get('boxes_info') is not None and error > 50:
-            boxes_info = status['boxes_info']
-            print(f"      🔍 Detected {boxes_info['num_boxes']} boxes:")
-            for box_idx, (box, score) in enumerate(zip(boxes_info['all_boxes'], boxes_info['all_scores'])):
-                box_abs = box * 512  # 절대 좌표로 변환
-                marker = "★" if box_idx == boxes_info['selected_idx'] else " "
-                print(f"         {marker} Box {box_idx}: center=({box_abs[0]:6.1f},{box_abs[1]:6.1f}), "
-                      f"size=({box_abs[2]:6.1f},{box_abs[3]:6.1f}), conf={score:.3f}")
-    
-    print(f"\n✅ YOLO predictions loaded: {len(predictions_abs)} samples")
-    print(f"   Mean error: {mean_error:.2f}±{std_error:.2f} pixels")
-    print(f"   Detection success rate: {sum(s['detection_success'] for s in detection_status) / len(detection_status) * 100:.1f}%")
-    
+    r = yolo_predict(checkpoint_path, device=device, max_frames=max_frames, split="all",
+                     conf_threshold=conf_threshold)
+    errors = r["pixel_errors"]
+    print(f"✅ YOLO predictions loaded: {len(errors)} samples "
+          f"(detection rate {r['metrics']['detection_rate']:.1f}%)")
+    print(f"   Mean error: {errors.mean():.2f}±{errors.std():.2f} pixels")
     return {
-        'predictions': predictions_abs,
-        'targets': targets_abs,
-        'mean_error': mean_error,
-        'std_error': std_error,
-        'method': 'YOLO (Tiny)'
+        'predictions': r["predictions_px"],
+        'targets': r["targets_px"],
+        'mean_error': float(errors.mean()),
+        'std_error': float(errors.std()),
+        'method': 'YOLO (Tiny)',
     }
 
 
@@ -696,10 +520,9 @@ def main():
     ap.add_argument("--cnn-checkpoint",
                     default=os.path.join(ROOT, "cnn", "runs", "baseline_mobilenet_v2", "mobilenet_v2_best.pth"))
     ap.add_argument("--yolo-checkpoint",
-                    default=os.path.join(ROOT, "yolo_brownian_sim", "checkpoints_yolo_tiny_laser_brownian",
-                                         "yolo_tiny_laser_brownian_best.pth"))
+                    default=os.path.join(ROOT, "yolo", "runs", "baseline_yolo_tiny", "yolo_tiny_best.pth"))
     ap.add_argument("--filter-csv",
-                    default=os.path.join(ROOT, "filter_brownian_sim", "csv_results", "spatial_filter_kalman.csv"))
+                    default=os.path.join(ROOT, "filter", "results", "no_filter_kalman.csv"))
     ap.add_argument("--max-frames", type=int, default=100)
     ap.add_argument("--conf-threshold", type=float, default=0.6)
     ap.add_argument("--device", default="cuda")
@@ -712,8 +535,8 @@ def main():
     ground_truth_csv = os.path.join(DATA, "gaussian_brownian_512x512_labels.csv")
     for path, hint in [
         (args.cnn_checkpoint, "python cnn/train.py --model mobilenet_v2"),
-        (args.yolo_checkpoint, "cd yolo_brownian_sim && python train.py"),
-        (args.filter_csv, "cd filter_brownian_sim && python export_center_data.py"),
+        (args.yolo_checkpoint, "python yolo/train.py"),
+        (args.filter_csv, "python filter/run.py --max-frames 3000"),
         (ground_truth_csv, "python tools/generate_brownian_dataset.py"),
         (bin_file, "python tools/generate_brownian_dataset.py"),
     ]:
@@ -723,8 +546,7 @@ def main():
 
     cnn_results = load_cnn_predictions(args.cnn_checkpoint, max_frames=args.max_frames, device=args.device)
     yolo_results = load_yolo_predictions(
-        checkpoint_path=args.yolo_checkpoint, bin_file_path=bin_file, csv_labels_path=ground_truth_csv,
-        max_frames=args.max_frames, conf_threshold=args.conf_threshold)
+        args.yolo_checkpoint, max_frames=args.max_frames, conf_threshold=args.conf_threshold, device=args.device)
     filter_results = load_filter_predictions(
         csv_file_path=args.filter_csv, ground_truth_csv=ground_truth_csv,
         temporal_window=5, max_frames=args.max_frames)

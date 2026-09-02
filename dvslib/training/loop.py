@@ -1,7 +1,11 @@
-"""Regression training loop for (x, y) center prediction.
+"""Training loop for (x, y) center prediction — shared by every method.
 
-Recipe는 cnn_brownian_sim과 동일: MSELoss + Adam + ReduceLROnPlateau + EarlyStopping.
-best checkpoint는 보고 지표인 pixel_error_mean 기준으로 저장한다 (val_loss가 아니라).
+모델 출력 형식이 달라도(CNN: (B,2) 좌표, YOLO: detection grid) 같은 루프를 쓰도록
+두 hook을 주입받는다:
+  - criterion(out, y) → loss         (기본 MSELoss; YOLO는 bbox loss 어댑터)
+  - to_xy(out) → (B,2) 정규화 좌표    (기본 identity; YOLO는 decode→center)
+지표(pixel error·Acc@Npx)는 항상 to_xy 결과로 계산하므로 방식 간 비교가 같은 의미를 갖는다.
+Recipe: Adam + (plateau | warmup→cosine) + grad_clip, monitor=val_loss.
 """
 
 import os
@@ -37,6 +41,8 @@ class RegressionTrainer:
         grad_clip: Optional[float] = None,
         config: Optional[dict] = None,
         set_mode=None,
+        criterion=None,
+        to_xy=None,
     ):
         self.model = model.to(device)
         # train/eval 전환 방법 주입 (기본=표준 .train()). PT2E exported 모델은 .train()이 막혀
@@ -52,7 +58,9 @@ class RegressionTrainer:
         self.save_dir = save_dir
         self.grad_clip = grad_clip
 
-        self.criterion = nn.MSELoss()
+        self.criterion = criterion or nn.MSELoss()
+        # 출력 → (B,2) 좌표. 상태를 갖는 후처리(YOLO 검출 실패 시 직전 좌표 유지)는 reset()을 제공.
+        self.to_xy = to_xy or (lambda out: out)
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
 
         # scheduler: "plateau"(현행, val_loss 기반) 또는 "cosine"(warmup → cosine decay, 안정화용)
@@ -80,6 +88,8 @@ class RegressionTrainer:
 
     def _run_epoch(self, loader, train: bool) -> Dict[str, float]:
         self._set_mode(self.model, train)
+        if hasattr(self.to_xy, "reset"):
+            self.to_xy.reset()
         total_loss, n = 0.0, 0
         preds, targets = [], []
         ctx = torch.enable_grad() if train else torch.no_grad()
@@ -98,8 +108,10 @@ class RegressionTrainer:
                     self.optimizer.step()
                 total_loss += loss.item() * x.size(0)
                 n += x.size(0)
-                preds.append(out.detach().cpu().numpy())
-                targets.append(y.detach().cpu().numpy())
+                with torch.no_grad():
+                    xy = self.to_xy(out.detach())
+                preds.append(xy.detach().cpu().numpy())
+                targets.append(y.detach().cpu().numpy()[:, :2])
 
         preds = np.concatenate(preds)
         targets = np.concatenate(targets)

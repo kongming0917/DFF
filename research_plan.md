@@ -35,9 +35,9 @@ DVS 카메라 데이터에서 레이저 빔 중심 좌표 (x, y)를 실시간 �
 리팩토링이 정확도를 깨지 않았음을 증명할 비교 기준 마련. 각 방식은 해당 마이그레이션 직전에 baseline을 기록한다.
 
 - [x] CNN baseline 확보 — 기존 기록(2.11px)은 재현 불가 유령 수치, 초기 unseeded 2.62px도 단발(운)로 판명 → seed 고정 + cosine recipe로 안정화. **재현 검증된 baseline: 5-seed sweep 3.07±0.31px / Acc@5px 85.7±1.3% (붕괴 0/5), canonical seed42 = 2.79px / 87.5% / 94.2% / ~1090 FPS** (best.pth 재로드 = 기록값 일치). 상세: `BASELINE.md`
-- [ ] YOLO(`yolo_brownian_sim`) 현 지표 baseline 기록
-- [ ] Filter(`filter_brownian_sim`) 현 지표 baseline 기록
-- [ ] 공통: split·seed 고정, 수치 캡처 (mean px error, Acc@5px, 추론 FPS)
+- [x] YOLO(`yolo_brownian_sim`) baseline 기록 — 학습 시 기록은 재현 불가(seed 없는 random split, epoch 5 ckpt만 존재). `tools/evaluate.py --yolo-checkpoint`로 재평가: **blocked val 93.69px / Acc@5px 1.37%** (학습 구간 밖 일반화 실패; 학습 데이터 위에선 12.6px). 이식 후 동일 ckpt로 이 값 재현이 회귀 기준, 그 뒤 CNN 동일 recipe로 재학습 필요. 상세: `BASELINE.md`
+- [x] Filter baseline 기록 — `filter/run.py`(dvslib 이식, 옛 CSV와 bit-identical 검증) 3000f → blocked val 중심 프레임 1098개: **Kalman 10.62px / Acc@5px 44.2%**, Median 20.31px / 60.5%. SpatialClusterFilter 효과 없음. 옛 평가 스크립트는 frame_number(88~)를 frame_idx에 병합한 88프레임 어긋남 → 옛 기록 무효. 상세: `BASELINE.md`
+- [x] 공통 측정 도구: `tools/evaluate.py` (cnn ckpt / yolo ckpt / 예측 CSV → dvslib 지표). split은 `dvslib.data.split.blocked_indices`로 고정
 
 **완료 기준:** 리팩토링할 각 방식에 대해 wandb에 `baseline` run이 존재하고 수치가 문서화됨.
 
@@ -63,15 +63,15 @@ archive/                                            # fixed-GT 구버전 (이동
 - [x] 이동 후 활성 코드 구버전 참조 없음 확인 (스모크: dvslib import OK, baseline 2.11px 재현)
 
 ### 1-3. 공통 코드 추출
-- [ ] bin I/O: `lib/bin_processor.py` → `dvslib/data/`로 이전, 단일 소스 유지
-- [ ] 중복 utils(EarlyStopping / Checkpoint / MetricsTracker / 시각화) 통합
-- [ ] Dataset 베이스 + split 로직 통합 (temporal leakage 방지 규칙 일원화)
-- [ ] Trainer 루프 공통화, 모델별 차이는 `config` / `model.py`에만 남김
+- [x] bin I/O: `lib/bin_processor.py` → `dvslib/data/`로 이전 완료, shim 삭제 (Filter 이식 후)
+- [x] 중복 utils(EarlyStopping / Checkpoint / MetricsTracker / 시각화) 통합 → `dvslib/training/callbacks.py`, `dvslib/eval/visualize.py`
+- [x] Dataset 베이스 + split 로직 통합 → `dvslib/data/dataset.py`·`split.py` (CNN·YOLO가 같은 Dataset 사용)
+- [x] Trainer 루프 공통화 → `RegressionTrainer` + `criterion`·`to_xy` hook (YOLO는 hook만 제공)
 
 ### 1-4. 활성 방식 마이그레이션 (CNN → YOLO → Filter)
 - [x] **CNN**: `cnn_brownian_v2` → `cnn`, `dvslib` 기반 thin experiment로 재작성 완료. `train.py`·`inference.py` 모두 dvslib 사용. QAT는 `cnn/quantization.py`로 분리, 옛 스크립트·중복 체크포인트 정리. README·CLAUDE 갱신. baseline 재현 검증됨 (2.62px)
-- [ ] **YOLO**: `yolo_brownian_sim`을 `dvslib` 기반으로 재작성 (CNN 마이그레이션 패턴 그대로 적용)
-- [ ] **Filter**: `filter_brownian_sim`을 `dvslib` 기반으로 정리 (학습 없는 방식이라 data/eval만 공유)
+- [x] **YOLO**: `yolo/`로 재작성 완료. 데이터셋은 CNN과 공유, bbox 타깃·decode는 `YOLOCriterion`·`YOLOCenterDecoder` hook. 옛 ckpt로 baseline 93.69px/1.37% **정확 재현**. 옛 디렉토리 삭제. CNN recipe 재학습은 진행 중(결과는 `BASELINE.md`)
+- [x] **Filter**: `filter/`로 이관 완료 (`dvs_filter.py` 동작 불변, `run.py` 진입점). 옛 100f CSV와 bit-identical 검증. 필터 단계 16-worker 병렬(3h→7min). 옛 디렉토리·`lib/` shim 삭제. `origin.py`(GT 원점 후보 측정) 추가
 
 **부속 스크립트 이관** ✓ — `cnn_brownian_sim` 삭제 완료 (재현성 검증: baseline 체크포인트 2.7933px/2.8224px 재현, seed 42 학습 run 간 bit-identical, 기록된 run의 초반 epoch과 일치).
 부수 발견: `generate_brownian_dataset.py`는 `-org` 옵션 추가 시 `else:` 본문 들여쓰기가 빠져 **import 자체가 불가능한 상태**였음 → 수정. 방식 무관한 분석 로직은 `dvslib/eval`에 함수로, 명령줄 진입점은 루트 `tools/`에 얇게(경로는 인자로, 계산은 dvslib에 위임).
@@ -83,7 +83,7 @@ archive/                                            # fixed-GT 구버전 (이동
 - [x] 720×960 비정사각 ROI: **지원 추가** — `--roi 720x960`(HxW) 파싱을 `dvslib.data.dataset.parse_roi`로 일원화, train/inference 모두 적용. 옛 720×960 체크포인트 로드·평가 동작 확인(단, 그 체크포인트는 pre-blocked 학습이라 수치는 참고용)
 - [x] 위 완료 후 `cnn_brownian_sim` 삭제, `CLAUDE.md`·`README.md` Directory Map 갱신(`tools/` 추가, `cnn_brownian_sim` 제거)
 
-**완료 기준:** 세 방식 모두 통합 구조에서 동작하고, 각자 Phase 0 baseline 지표를 오차 범위 내 재현. 중복 코드 대폭 감소.
+**완료 기준:** 세 방식 모두 통합 구조에서 동작하고, 각자 Phase 0 baseline 지표를 오차 범위 내 재현. 중복 코드 대폭 감소. → **달성** (2026-09-02). 남은 것: YOLO 재학습 결과 기록, `compare_brownian.py`의 순차 100f 비교를 Phase 2 wandb 비교로 대체.
 
 ### 1-5. CNN 파이프라인 품질 감사 (code review)
 

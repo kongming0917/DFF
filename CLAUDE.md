@@ -16,35 +16,42 @@ conda env create -f environment.yml && conda activate dvs_project
 # CNN(주력): dvslib 기반 thin experiment. argparse-based, non-interactive (명령 모음: cnn/COMMANDS.md)
 python cnn/train.py --model mobilenet_v2 --epochs 50 --wandb
 python cnn/inference.py                    # baseline checkpoint 평가
+python tools/evaluate.py --checkpoint <best.pth>   # 방식 공용 평가 (--yolo-checkpoint / --pred-csv 도 가능)
 python tools/plot_error_vs_frame.py --checkpoint <best.pth>   # 방식 공용 분석 도구 (tools/)
 python cnn/train_qat.py --checkpoint cnn/runs/baseline_mobileone_s0_pretrained/mobileone_s0_best.pth   # PT2E QAT → INT8
 
-# YOLO/Filter: 아직 옛 self-contained layout — 해당 디렉토리 안에서 실행 (assumes cwd-relative paths)
-cd yolo_brownian_sim && python train.py
+# YOLO(dvslib 기반, CNN과 동일 recipe·split)
+python yolo/train.py --epochs 50 --seed 42
+python yolo/inference.py
+
+# Filter(dvslib 기반, 학습 없음): CSV 생성 → tools/evaluate.py --pred-csv 로 평가
+python filter/run.py --max-frames 3000
+python tools/evaluate.py --pred-csv filter/results/no_filter_kalman.csv --split val --max-frames 3000
 ```
 
-테스트 프레임워크 없음. `test.py`는 pytest가 아니라 필터 파이프라인 실행 스크립트입니다.
+테스트 프레임워크 없음. 각 방식의 `model.py`·`dvs_filter.py`는 `python <file>`로 self-test만 제공합니다.
 
 ## Directory Map (가장 헷갈리는 부분)
 
-리팩토링이 진행 중입니다. 공통 로직은 **`dvslib` 패키지**로 모이고, 각 방식은 그 위의 **thin experiment**가 됩니다. **CNN은 이식 완료**, YOLO/Filter는 아직 옛 self-contained layout(`train.py`/`inference.py`/`dataset.py`/`model.py`/`utils.py` 반복)입니다.
+공통 로직은 **`dvslib` 패키지**에 있고, 각 방식(`cnn`·`yolo`·`filter`)은 그 위의 **thin experiment**입니다. **세 방식 모두 이식 완료** (Phase 1). 옛 self-contained 디렉토리와 `lib/` shim은 삭제됨.
 
 | 디렉토리 | 역할 |
 |---|---|
 | `dvslib/` | 공통 패키지 — `data`(bin I/O·Dataset·blocked split)·`eval`(metric)·`training`(loop·callback)·`tracking`(wandb). 이식된 방식이 import |
 | `cnn/` | **CNN 회귀 (주력)** — dvslib 기반 thin experiment. MobileNetV2 / MobileOne S0 + PT2E QAT(`train_qat.py`). `cnn_brownian_v2`에서 rename. 자체 `CLAUDE.md` |
-| `yolo_brownian_sim/` | YOLOv3-Tiny 검출 — 옛 layout (dvslib migration 예정) |
-| `filter_brownian_sim/` | 필터 휴리스틱 (학습 불필요) — 옛 layout |
-| `tools/` | 방식 공용 명령줄 도구 — 데이터셋 생성·bin 검사·오차 시각화·3방식 비교. 계산은 dvslib에 위임, 경로는 인자 |
+| `yolo/` | **YOLOv3-Tiny 검출** — dvslib 기반 thin experiment. 데이터셋은 CNN과 동일, bbox 타깃·decode는 `model.py`의 hook(`YOLOCriterion`·`YOLOCenterDecoder`). 자체 `CLAUDE.md` |
+| `filter/` | **필터 휴리스틱** (학습 없음) — `dvs_filter.py`(필터·추출기 본체, GT 원점 측정 도구이기도 함)·`run.py`(CSV 생성)·`origin.py`(정지 레이저 원점 후보). 자체 `CLAUDE.md` |
+| `tools/` | 방식 공용 명령줄 도구 — `evaluate.py`(baseline·회귀 검증), 오차 시각화, 3방식 비교, 데이터셋 생성, bin 검사. 예측 얻기는 `_common.py`(cnn/yolo/csv), 계산은 dvslib |
 | `archive/` | fixed-GT 1세대 — `cnn_sim`·`filter_sim`·`yolo_sim` |
 | `eventrans/` | EventTransformer (Phase 3, 예정) |
-| `lib/` | `bin_processor` re-export shim → dvslib (미이식 디렉토리용) |
 
 리팩토링 전 원본 `cnn_brownian_sim`은 **삭제됨**(재현성 검증 완료 후). 옛 체크포인트 보존분은 `cnn/checkpoints_*/`, 기록값은 `BASELINE.md`.
 
 ## Key Rules
 
-- 원시 데이터는 `data/`의 2-bit packed binary(`.bin`). bin I/O single source는 **`dvslib/data/bin_processor.py`** (`lib/bin_processor.py`는 backward-compat shim — 미이식 디렉토리가 `from lib.bin_processor import ...`로 계속 동작). 포맷 변경은 dvslib 한 곳만.
+- 원시 데이터는 `data/`의 2-bit packed binary(`.bin`). bin I/O single source는 **`dvslib/data/bin_processor.py`** 하나뿐 (`lib/` shim은 삭제됨). 포맷 변경은 dvslib 한 곳만.
+- **Filter 알고리즘(`filter/dvs_filter.py`)은 동작을 바꾸지 말 것.** 데이터셋 GT 원점 (541, 361)은 정지 레이저에서 여러 추출기 결과를 보고 수동으로 정한 값이라, 알고리즘이 바뀌면 GT 근거가 달라진다. Filter 결과 CSV의 프레임 매칭은 `frame_idx`(0부터)로 — bin 헤더 `frame_number`(88부터)를 GT에 직접 병합하지 말 것 (옛 평가 스크립트의 88프레임 어긋남 원인).
+- 학습 루프(`dvslib/training/loop.py`)와 평가(`dvslib/eval/evaluate.py`)는 `criterion`·`to_xy` hook으로 방식 차이를 흡수한다. 새 방식은 hook만 제공하고 루프를 복제하지 말 것.
 - `*/mobileone_official.py`는 Apple 공식 구현이므로 수정 금지.
 - 데이터가 시계열이라 random split은 temporal leakage 발생 → blocked / K-fold split 사용 (split 로직은 `dvslib/data/split.py`에 일원화). 이 제약 유지.
 - QAT는 **PT2E(`torch.export`) 기반** `cnn/quantization.py` + `cnn/train_qat.py`. eager QAT(QuantStub 수동 배치)는 폐기됐으므로 되살리지 말 것. FPGA 제약(대칭 INT8)은 `get_fpga_quantizer` 한 곳에만 기술.

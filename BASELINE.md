@@ -109,10 +109,58 @@ ImageNet pretrained**(`mobileone_s0_unfused`, stage0(5ch)·head는 random) — �
 - 720×960은 비정사각 ROI라 현재 `inference.py`(정사각 `--roi`만 가정)로는 직접 평가 불가 — 별도 처리 필요.
 - INT8 로드 검증: `python cnn/model_summary.py --model <name> --int8 <int8.pth>`.
 
-## YOLO — (예정)
+## YOLO — YOLOv3-Tiny (`yolo_brownian_sim`, dvslib 이식 전)
 
-`yolo_brownian_sim` 마이그레이션 직전에 동일 방식으로 기록.
+측정: `python tools/evaluate.py --yolo-checkpoint yolo_brownian_sim/checkpoints_yolo_tiny_laser_brownian/yolo_tiny_laser_brownian_best.pth`
+(`tools/_common.yolo_predict` — 옛 inference 의미 그대로: 입력 /max 정규화, decode → NMS → ROI 중심 우선, 검출 실패 시 직전 성공 좌표).
+구현 검증: 처음 100프레임 순차 평가가 옛 `compare_brownian.py` 기록값 9.934px와 일치 (9.9347px).
 
-## Filter — (예정)
+### 저장된 체크포인트의 실체
 
-`filter_brownian_sim` 마이그레이션 직전에 동일 방식으로 기록.
+- 체크포인트는 `*_best.pth` 하나뿐 (**epoch 5**, val_loss 1.383). metrics_history·config 없음 (PNG만).
+- 학습 조건: **max_frames=500**, `random_split` 80/20 (**seed 없음 → 검증셋 재현 불가**, temporal leakage), batch 4, lr 1e-3, conf 0.6.
+- 즉 학습 시 기록된 pixel error는 재현할 수 없고, 아래 재평가 수치가 유일한 baseline.
+
+### 재평가 (동일 체크포인트, 현재 데이터)
+
+| 평가 구간 | conf | samples | pixel error (mean ± std) | Acc@5px | Acc@10px | 검출률 | FPS |
+|---|---|---|---|---|---|---|---|
+| **blocked val (3000f, CNN과 동일)** | **0.6** | 1098 | **93.69 ± 52.52 px** | **1.37 %** | **3.46 %** | 71.6 % | ~1109 |
+| blocked val (3000f) | 0.3 | 1098 | 84.87 ± 51.61 px | 0.91 % | 3.55 % | 100 % | ~1267 |
+| 처음 500f 전체 (= 학습 데이터 포함) | 0.6 | 496 | 12.57 ± 18.97 px | 21.57 % | 57.86 % | 98.2 % | ~1204 |
+| 처음 100f 전체 (옛 compare 조건) | 0.6 | 96 | 9.93 ± 10.69 px | 32.29 % | 68.75 % | 97.9 % | — |
+
+- **회귀 검증 기준 = blocked val, conf 0.6: 93.69px / 1.37%** (dvslib 이식 후 같은 체크포인트로 이 값을 재현해야 함). FPS는 RTX 4090, bs=32, 공유 GPU 상태에서 측정.
+- **해석**: 이 체크포인트는 학습 구간(프레임 0~499, 모두 train block 0에 속함) 밖에서는 **사실상 동작하지 않는다**
+  (val block은 599~1147, 1797~2345). 500프레임·5 epoch 학습 + random split의 낙관적 검증이 만든 결과로,
+  옛 비교표의 YOLO 9.9px는 학습 데이터 위 수치였다. **이식 후에는 CNN과 동일 recipe(3000f, blocked, seed)로 재학습해야 공정 비교 가능.**
+- conf 0.3은 검출률 100%지만 오차는 그대로 큼 → 임계값 문제가 아니라 일반화 실패.
+
+## Filter — 휴리스틱 (`filter/`, dvslib 이식 후 측정)
+
+측정: `python filter/run.py --max-frames 3000` → `filter/results/*.csv`,
+`python tools/evaluate.py --pred-csv filter/results/<cond>.csv --split val --max-frames 3000`.
+학습이 없으므로 "이식 전후 동일성"은 CSV로 검증했다: `filter/run.py`(dvslib bin I/O, 필터 단계 16-worker 병렬,
+필터 결과를 추출기 간 공유)가 옛 `filter_brownian_sim/csv_results/`(100프레임)와 **bit-identical**
+(spatial_filter_kalman만 3.8e-5px 차이 — 옛 코드가 Kalman 객체를 재사용하며 `reset()`이 공분산을 완전히 초기화하지 않던 잔여 상태).
+평가 프레임 = CNN·YOLO blocked val 샘플의 **중심 프레임**(1098개) → 세 방식이 같은 프레임 집합에서 비교됨.
+
+### 옛 기록은 무효
+
+`filter_brownian_sim/evaluate_against_ground_truth.py`는 bin 헤더 `frame_number`(**88부터**)를 GT `frame_idx`(0부터)에
+그대로 병합해 **88프레임 어긋난 비교**였다 → `evaluation_results/*.png`의 수치는 신뢰 불가. 또 옛 CSV는 100프레임(train block 0)뿐.
+
+### 재평가 (3000프레임, blocked val 중심 프레임 1098개)
+
+| 조건 | pixel error (mean ± std) | Acc@5px | Acc@10px |
+|---|---|---|---|
+| no_filter + Median | 20.31 ± 33.67 px | 60.47 % | 69.31 % |
+| spatial_filter + Median | 20.53 ± 34.21 px | 60.56 % | 69.22 % |
+| **no_filter + Kalman** | **10.62 ± 10.94 px** | 44.17 % | 64.75 % |
+| spatial_filter + Kalman | 10.82 ± 11.19 px | 43.72 % | 63.93 % |
+
+- **회귀 검증 기준 = 위 4개 CSV** (`filter/results/`, 재생성 시 동일해야 함). 처리 시간: SpatialClusterFilter 3000f ≈ 7분(16 workers), 추출기 ≈ 15초.
+- 해석: Median은 절반 이상 프레임에서 5px 안이지만 실패 프레임의 오차가 매우 커서(std 34px) 평균이 나쁘다.
+  Kalman은 이상치를 눌러 평균 오차는 절반이지만 지연 때문에 5px 정확도는 낮다. SpatialClusterFilter는 이 데이터에서 효과 없음(±0.2px).
+- 세 방식 비교(blocked val, 동일 프레임): CNN 2.79px / YOLO(옛 ckpt) 93.7px / Filter(Kalman) 10.6px.
+- Filter는 GT 원점(541, 361)을 정할 때 쓴 측정 도구이기도 하다 — 알고리즘 변경 시 GT 근거가 달라지므로 주의.
