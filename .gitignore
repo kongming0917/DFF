@@ -4,8 +4,8 @@
 # embeddedsw 폴더 전체
 embeddedsw/
 
-# data 폴더 전체
-data/
+# data 폴더 전체 (루트 raw 데이터만 — dvslib/data 등 소스 디렉토리는 추적)
+/data/
 
 # 체크포인트 및 모델 파일 (용량이 큼)
 checkpoints*/
@@ -16,6 +16,20 @@ test_checkpoints/
 # 로그 파일
 logs/
 */logs/
+
+# wandb 로컬 run 파일
+wandb/
+*/wandb/
+
+# 학습 run 산출물 (체크포인트 등)
+runs/
+*/runs/
+
+# FPGA export 산출물 (export_mobileone_info.py 가 재생성)
+mobileone_info/
+*/mobileone_info/
+fpga_export/
+*/fpga_export/
 
 # 결과 폴더 (선택적 - 필요시 주석 해제)
 results/
@@ -44,7 +58,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/

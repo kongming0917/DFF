@@ -1,361 +1,137 @@
-# DVS 레이저 빔 중심점 실시간 감지 시스템
+# DVS 레이저 빔 중심점 검출 시스템
 
-DVS(Dynamic Vision Sensor) 카메라를 활용하여 레이저 빔의 중심 좌표를 FPGA에서 빠르게 감지하는 졸업 연구 프로젝트입니다.
+DVS(Dynamic Vision Sensor) 카메라 데이터에서 레이저 빔의 중심 좌표 (x, y)를 실시간으로 검출하고, 최종적으로 FPGA에 배포하는 것을 목표로 하는 졸업 연구 프로젝트입니다. 동일한 문제를 필터 기반 휴리스틱, CNN 회귀, YOLO 검출 세 가지 방식으로 구현하고 정량적으로 비교합니다.
 
-## 🎯 연구 목표
+향후 연구 발전 계획은 [research_plan.md](research_plan.md)를 참고하세요.
 
-- **핵심 과제**: DVS 카메라 데이터를 활용하여 레이저 빔의 중심 좌표와 모양(높이/너비)을 FPGA로 빠르게 감지
-- **최종 목표**: 실시간 처리가 가능한 경량화된 알고리즘 개발 및 FPGA 구현
-- **응용 분야**: 레이저 정렬, 광학 시스템 제어, 고속 비전 시스템
+## Project Structure
 
-## 📁 프로젝트 구조
+공통 로직(data·split·metric·training loop·wandb)을 **`dvslib` 패키지**로 모으고, 각 방식은 그 위의 **thin experiment**(모델·설정·entrypoint만)로 두는 구조로 리팩토링 중입니다. 이렇게 하면 방식 간 split·지표가 갈라지지 않아 비교가 공정합니다. **CNN은 이식 완료**, YOLO/Filter는 아직 옛 self-contained layout입니다.
+
+데이터는 두 종류입니다 — fixed GT(1세대, `archive/`로 이동)와 brownian motion(현행).
 
 ```
-dvs/
-├── filter_sim/          # 필터 기반 휴리스틱 방식
-├── cnn_sim/             # CNN 기반 딥러닝 방식
-├── yolo_sim/            # YOLO 기반 객체 감지 방식
-├── data/                # DVS 센서 데이터
-├── environment.yml      # Conda 환경 설정
-├── requirements.txt     # Python 패키지 의존성
-└── README.md           # 이 파일
+dvs/sim/
+├── dvslib/                  # 공통 패키지 — data·eval·training·tracking (thin experiment가 import)
+├── cnn/                     # CNN 회귀 (주력) — dvslib 기반, MobileNetV2 / MobileOne+QAT
+├── yolo_brownian_sim/       # YOLOv3-Tiny 검출 — 옛 self-contained layout (migration 예정)
+├── filter_brownian_sim/     # 필터 휴리스틱 (학습 불필요) — 옛 layout
+├── eventrans/               # EventTransformer (Phase 3, 예정)
+├── tools/                   # 방식 공용 CLI — 데이터셋 생성·bin 검사·오차 시각화·3방식 비교
+├── archive/                 # fixed-GT 1세대 — {filter,cnn,yolo}_sim
+├── lib/                     # bin_processor re-export shim → dvslib (미이식 디렉토리용)
+└── data/                    # DVS 센서 데이터 (.bin, 레이블 CSV)
 ```
 
-## 🔬 연구 방법론 및 발전 과정
+옛 layout(yolo/filter)은 `train.py` / `inference.py` / `dataset.py` / `model.py` / `utils.py`를 반복하지만, `cnn`은 이 로직을 `dvslib`에서 import하고 모델·진입점만 가집니다. 리팩토링 전 원본(`cnn_brownian_sim`)은 baseline 재현을 검증한 뒤 삭제했습니다.
 
-이 프로젝트는 3단계의 점진적인 접근 방식을 통해 발전했습니다:
+## Data Format
 
-### 1️⃣ Filter-based 휴리스틱 방식 (`filter_sim/`)
+원시 데이터는 `data/`에 2-bit packed binary(`.bin`) 형식으로 저장됩니다.
 
-**개요**: 초기 접근 방법으로 이벤트 밀도, 공간 클러스터링, 칼만 필터 등의 신호 처리 기법을 활용
+- 프레임 구조: 8-byte 헤더(`<II`: timestamp + frame_number) + `(H*W)/4` 바이트의 패킹된 픽셀
+- 픽셀 값: `0` = no event, `1` = ON event, `2` = OFF event (바이트당 2bit씩 4픽셀)
+- 해상도: 원본 720×960, ROI crop 512×512. 학습·추론의 `--roi`는 `512`(정사각) 또는 `720x960`(HxW) 형식
 
-**주요 기술**:
-- **Event Density Filter**: 노이즈 제거를 위한 이벤트 밀도 기반 필터링
-- **Spatial Cluster Filter**: KDTree 기반 공간적 클러스터링으로 레이저 영역 추출
-- **Kalman Filter**: 시간적 일관성을 위한 중심점 추적
-- **Median/Mean Point Extractor**: 통계적 중심점 계산
+bin 파일 입출력의 single source는 **`dvslib/data/bin_processor.py`**의 `BinProcessor` / `DVSFrame`입니다 (`lib/bin_processor.py`는 backward-compat shim — 아직 dvslib으로 이식하지 않은 디렉토리가 `from lib.bin_processor import ...`로 계속 동작). 필터링이 필요한 모듈은 이를 상속한 `filter_*/dvs_filter.py`의 `FilterableBinProcessor`를 사용합니다.
 
-**장점**:
-- 구현이 간단하고 이해하기 쉬움
-- 실시간 처리 가능한 낮은 연산량
-- FPGA 구현에 적합한 단순한 로직
+### Brownian Motion Dataset
 
-**한계**:
-- 노이즈에 민감함
-- 복잡한 패턴 인식 어려움
-- 수동 파라미터 튜닝 필요
+`*_brownian_*` 데이터셋은 학습 시점에 증강하지 않습니다. `tools/generate_brownian_dataset.py`가 사전에 `gaussian_large.bin`을 읽어 brownian motion shift를 적용한 `gaussian_brownian_512x512.bin`과 `..._labels.csv`를 생성하며, 데이터셋 클래스는 CSV의 ground truth(`frame_idx, shift_x, shift_y, cnn_rel_x, cnn_rel_y`)를 로드하기만 합니다. 이 생성 스크립트는 일반적으로 재실행할 필요가 없습니다.
 
-**성능**: 평균 오차 ~10px (960×720 해상도 기준)
+## Approaches
 
-📖 자세한 내용: [filter_sim/README.md](filter_sim/README.md)
+### Filter (`filter_brownian_sim`, 1세대 `archive/filter_sim`)
 
----
+신호 처리 기법으로 중심점을 추출하는 초기 접근법입니다.
 
-### 2️⃣ CNN 기반 딥러닝 방식 (`cnn_sim/`)
+- Event Density Filter: 이벤트 밀도 기반 노이즈 제거
+- Spatial Cluster Filter: KDTree 기반 공간 클러스터링으로 레이저 영역 추출
+- Kalman Filter: 시간적 일관성을 위한 중심점 추적
+- Median / Mean Point Extractor: 통계적 중심점 계산
 
-**개요**: Fixed Ground Truth 방식을 도입하여 데이터 증강을 통한 학습 수행
+학습이 필요 없고 연산량이 낮아 FPGA 구현에 적합하지만, 노이즈에 민감하고 수동 파라미터 튜닝이 필요합니다.
 
-**주요 혁신**:
-- **Fixed GT 시스템**: 실시간 필터링 제거로 처리 속도 5-10배 향상
-- **ROI 기반 처리**: 메모리 사용량 99% 감소 (960×720 → 512×512)
-- **다중 모델 지원**: BasicCNN, MobileNetV2, MobileNetV2-Light
-- **시간적 다채널**: 5개 프레임을 다채널 입력으로 사용하여 시간적 정보 활용
+### CNN Regression (`cnn`, dvslib 기반)
 
-**지원 모델**:
+좌표를 직접 예측하는 회귀 모델입니다. 실시간 필터링을 제거하고 ROI 기반 처리(960×720 → 512×512)로 메모리 사용량을 줄였습니다. 현행 코드는 `cnn`(주력, `cnn_brownian_v2`에서 rename)이며 데이터·split·metric·training loop는 `dvslib`에서 옵니다. fixed-GT 1세대는 `archive/cnn_sim`에 있습니다.
 
-| 모델 | 파라미터 수 | 용도 | FPGA 적합성 |
-|------|-------------|------|-------------|
-| BasicCNN | ~1M | 프로토타이핑 | ⭐⭐⭐ |
-| MobileNetV2 | ~2-3M | 높은 정확도 | ⭐⭐ |
-| MobileNetV2-Light | ~1.5M | 경량화 | ⭐⭐⭐⭐ |
+지원 모델은 MobileNetV2(baseline)와 MobileOneS0이며, MobileOneS0은 PT2E QAT를 거쳐 INT8로 양자화하여 FPGA 배포를 목표로 합니다 (`cnn/quantization.py`, `cnn/train_qat.py`).
 
-**데이터 증강 기법**:
-1. 랜덤 시프트 (±50px): 다양한 중심점 위치 학습
-2. ROI 추출: 관심 영역만 처리하여 효율성 향상
-3. 정규화: 0-1 범위로 좌표 정규화
+### YOLO Detection (`yolo_brownian_sim`, 1세대 `archive/yolo_sim`)
 
-**장점**:
-- 높은 정확도 (평균 오차 ~3-5px)
-- 노이즈에 강건함
-- 복잡한 패턴 학습 가능
-- 데이터 기반 자동 최적화
+레이저 스팟을 객체로 보고 YOLOv3-Tiny로 단일 객체를 검출한 뒤 bounding box 중심을 레이저 중심으로 사용합니다. 크기(w, h) 정보와 신뢰도 점수를 추가로 얻을 수 있고 다중 레이저로 확장 가능하지만, 단일 레이저 검출에는 구조가 과도하게 복잡합니다.
 
-**한계**:
-- 학습 데이터 필요
-- FPGA 구현 복잡도 증가
-- 실시간 추론을 위한 양자화 필요
+## Model Architecture
 
-**성능**: 평균 오차 ~3-5px, Acc@5px ~85-95%
+회귀 방식의 공통 사항입니다.
 
-📖 자세한 내용: [cnn_sim/README.md](cnn_sim/README.md)
+- 입력: `(batch, temporal_window, H, W)`. 연속 `temporal_window`개(기본 5) 프레임을 다채널로 쌓아 시간 정보를 인코딩합니다. `temporal_window=1`이면 단일 프레임.
+- 출력: `(batch, 2)` = 정규화된 (x, y) ∈ [0, 1] (CNN 회귀는 Hardsigmoid로 클램프).
+- 입력 정규화 없음: DVS 값이 이산값 {0, 1, 2}이고 MobileOne 첫 레이어의 BatchNorm이 스케일을 흡수하므로 별도 정규화를 적용하지 않습니다.
 
----
+### Reparameterization & QAT
 
-### 3️⃣ YOLO 기반 객체 감지 방식 (`yolo_sim/`)
+학습 시에는 multi-branch 구조를 사용하고, 추론 전 `model.reparameterize()`로 single-branch로 변환합니다. INT8 양자화는 PT2E(`torch.export` 기반) QAT로 수행하며 순서는 다음과 같습니다.
 
-**개요**: 레이저 스팟을 객체로 간주하여 Bounding Box 감지 후 중심점 추출
+1. FP32 학습 완료 (`cnn/train.py`)
+2. `reparameterize()` — multi-branch → single-branch
+3. `quantization.prepare_qat()` — 그래프 캡처 후 Quantizer가 observer/fake-quant 자동 삽입 (Conv-BN fusion 포함)
+4. QAT 파인튜닝 (`cnn/train_qat.py`, dvslib 학습 루프 재사용)
+5. `quantization.convert()` — INT8 추론 그래프로 변환·저장
 
-**주요 기술**:
-- **YOLOv3-Tiny**: 경량화된 YOLO 아키텍처 사용
-- **단일 객체 감지**: 레이저 스팟 하나만 감지하도록 최적화
-- **Bbox → Center**: Bounding box의 중심을 레이저 중심으로 사용
-- **시간적 다채널**: CNN과 동일하게 5개 프레임 사용
+`mobileone_official.py`는 Apple 공식 구현이므로 수정하지 않습니다.
 
-**YOLO vs CNN Regression**:
+### Data Split
 
-| 특성 | YOLO Detection | CNN Regression |
-|------|----------------|----------------|
-| 접근법 | 물체 감지 후 중심 추출 | 좌표 직접 예측 |
-| 출력 | (x, y, w, h, conf) → (x, y) | (x, y) |
-| 장점 | 크기 정보 제공, 여러 객체 가능 | 직관적, 빠른 추론 |
-| 단점 | 복잡한 Loss, 많은 파라미터 | 크기 정보 없음 |
+DVS 데이터는 시계열이므로 랜덤 split을 사용하면 시간적으로 인접한 프레임이 학습/검증에 동시에 포함되어 temporal leakage가 발생합니다. 이를 막기 위해 블록 단위로 나누는 blocked split(예: 블록 0,2,4 → 학습 / 1,3 → 검증, 블록 사이 갭 50프레임)과 K-fold 분할을 사용합니다.
 
-**장점**:
-- 레이저 크기(w, h) 정보 추가 획득
-- 여러 레이저 동시 감지 가능 (확장성)
-- 신뢰도(confidence) 점수 제공
-
-**한계**:
-- CNN 회귀보다 복잡한 구조
-- 단일 레이저 감지에는 과도한 복잡도
-- FPGA 구현이 더 어려움
-
-**성능**: 평균 오차 ~4-7px, Acc@5px ~80-90%
-
-📖 자세한 내용: [yolo_sim/README.md](yolo_sim/README.md)
-
----
-
-## 📊 방법론 비교
-
-### 정확도 비교
-
-> ⚠️ **정량적 성능은 지속적으로 개선 중입니다.**
-> 최신 결과는 각 폴더의 `checkpoints/`, `logs/` 및 시각화 파일을 참조하세요.
-
-### 특성 비교
-
-| 방법 | 정확도 | 처리 속도 | FPGA 구현 | 노이즈 강건성 | 확장성 |
-|------|--------|----------|-----------|--------------|--------|
-| **Filter** | 낮음 | ⚡⚡⚡⚡⚡ | ⭐⭐⭐⭐⭐ | 낮음 | 낮음 |
-| **CNN** | 높음 | ⚡⚡⚡ | ⭐⭐⭐⭐ | 높음 | 보통 |
-| **YOLO** | 개선 중 | ⚡⚡ | ⭐⭐ | 높음 | 높음 |
-
-### 추천 사용 사례
-
-- **Filter**: 초기 프로토타이핑, FPGA 직접 구현, 실시간 처리 우선
-- **CNN**: 최고 정확도 필요, 학습 데이터 충분, FPGA 양자화 가능
-- **YOLO**: 여러 레이저 감지, 크기 정보 필요, GPU 추론 환경
-
----
-
-## 🚀 빠른 시작
-
-### 환경 설정
+## Setup
 
 ```bash
-# Conda 환경 생성
 conda env create -f environment.yml
-conda activate dvs_project
-
-# 또는 pip 사용
-pip install -r requirements.txt
+conda activate dvs_project        # python 3.11, pytorch>=2.0, cuda 11.8
 ```
 
-### 데이터 준비
+## Usage
 
-DVS 센서 데이터는 `data/` 폴더에 `.bin` 형식으로 저장:
-
-```
-data/
-├── gaussian_large.bin    # 주요 실험 데이터
-└── ...
-```
-
-**데이터 형식**: 2-bit packed binary files
-- 해상도: 960×720
-- 프레임 헤더: 8-byte (timestamp + frame_number)
-- 이벤트 타입: 0=no_event, 1=ON_event, 2=OFF_event
-- 고정된 레이저 좌표
-
-### 실행 예시
+CNN(`cnn`)은 argparse-based, non-interactive입니다. 전체 명령 모음은 [`cnn/COMMANDS.md`](cnn/COMMANDS.md) 참고.
 
 ```bash
-# Filter 방식
-cd filter_sim && python test.py
+# CNN 학습 및 추론 (dvslib 기반)
+python cnn/train.py --model mobilenet_v2 --epochs 50 --wandb   # 학습 + wandb 기록
+python cnn/inference.py                                         # baseline checkpoint 평가
+python cnn/model_summary.py --model mobileone_s0               # 구조·파라미터·메모리 분석
 
-# CNN 학습
-cd cnn_sim && python train.py
-
-# YOLO 학습
-cd yolo_sim && python train.py
+# YOLO/Filter: 아직 옛 layout — 해당 디렉토리 안에서 실행 (assumes cwd-relative paths)
+cd yolo_brownian_sim && python train.py
+cd filter_brownian_sim && python test.py
 ```
 
----
+방식 공용 분석 도구는 `tools/`에 있습니다. 예측을 얻는 부분만 `--checkpoint`(cnn) 또는 `--pred-csv`(픽셀 좌표 CSV, Filter 결과 등)로 나뉘고, 그림은 `dvslib/eval/visualize.py`가 그립니다.
 
-## 📈 실험 결과
-
-### CNN vs Filter 비교
-
-최신 성능 결과는 다음을 참조하세요:
-- 📊 `cnn_yolo_filter_comparison.png` - 시각화된 비교 차트
-- 📁 각 폴더의 `checkpoints/` - 모델 체크포인트 (파일명에 성능 포함)
-- 📝 각 폴더의 `logs/` - 학습 로그 및 상세 결과
----
-
-## 🔧 FPGA 구현 고려사항
-
-### 권장 접근 방법
-
-1. **프로토타이핑**: Filter 방식으로 기본 시스템 검증
-2. **정확도 개선**: CNN 방식으로 학습 및 성능 확인
-3. **양자화**: INT8/INT16 고정소수점 변환
-4. **FPGA 배포**: 경량화된 CNN 또는 Filter 구현
-
-### FPGA 최적화 전략
-
-- **Filter 방식**: 파이프라인 병렬 처리, 간단한 연산자
-- **CNN 방식**: 
-  - Depthwise Separable Convolution 사용
-  - 파라미터 양자화 (INT8)
-  - 가중치 압축
-  - 하드웨어 가속기 활용
-
----
-
-## 📝 연구 진행 과정
-
-1. **Phase 1 - 기초 연구** (filter_sim)
-   - DVS 데이터 이해 및 기본 처리
-   - 필터 기반 알고리즘 구현
-   - 중심점 추출 기법 비교
-
-2. **Phase 2 - 딥러닝 도입** (cnn_sim)
-   - Fixed GT 방식 혁신
-   - 다양한 CNN 아키텍처 실험
-   - 데이터 증강 기법 최적화
-
-3. **Phase 3 - 객체 감지 확장** (yolo_sim)
-   - YOLO 기반 감지 시스템 구축
-   - 크기 정보 추가 획득
-   - 다중 객체 확장 가능성 검증
-
-4. **Phase 4 - 성능 비교 및 최적화** (현재)
-   - 방법론 간 정량적 비교
-   - FPGA 구현 준비
-   - 최종 시스템 선정
-
----
-
-## 🎯 주요 성과
-
-✅ **3가지 접근 방식** 구현 및 비교 완료
-✅ **Filter 대비 CNN 방식 정확도 2-3배 향상** 달성
-✅ **Fixed GT 시스템** 개발로 처리 속도 5-10배 개선
-✅ **ROI 기반 처리**로 메모리 사용량 99% 감소
-✅ **실시간 처리 가능성** 검증 (20-200 FPS)
-✅ **FPGA 구현 준비** 완료 (양자화 친화적 구조)
-
----
-
-## 📚 의존성
-
-### 핵심 라이브러리
-
-```
-python >= 3.8
-numpy >= 1.21.0
-pytorch >= 1.13.0
-torchvision >= 0.14.0
-matplotlib >= 3.5.0
-scipy >= 1.7.0
-pandas >= 1.3.0
-opencv-python >= 4.5.0
-filterpy >= 1.4.5  # Kalman filter용
-```
-
-### 선택적 라이브러리
-
-```
-seaborn >= 0.11.0  # 고급 시각화
-tensorboard >= 2.8.0  # 학습 모니터링
-```
-
-전체 의존성: [requirements.txt](requirements.txt)
-
----
-
-## 🔍 문제 해결
-
-### 일반적인 문제
-
-#### DVS 데이터 로딩 실패
 ```bash
-# filter_sim 경로 확인
-export PYTHONPATH=/hai/home/jdj/dvs/sim/filter_sim:$PYTHONPATH
+python tools/plot_error_vs_frame.py --checkpoint cnn/runs/baseline_mobilenet_v2/mobilenet_v2_best.pth
+python tools/save_max_error_frame.py --pred-csv filter_brownian_sim/csv_results/spatial_filter_kalman.csv
+python tools/compare_brownian.py --max-frames 100        # CNN vs YOLO vs Filter (순차 window, PNG)
+python tools/inspect_bin.py data/gaussian_large.bin       # bin 구조·이벤트 통계
+python tools/generate_brownian_dataset.py --help          # 데이터셋 생성 (보통 재실행 불필요)
 ```
 
-#### GPU 메모리 부족
-```python
-# train.py에서 배치 크기 감소
-config.batch_size = 2  # 기본값 8
-```
+별도의 테스트 프레임워크는 없습니다. `test.py`는 pytest가 아니라 필터 파이프라인 실행 스크립트입니다.
 
-#### 추론 속도 느림
-```python
-# 경량화 모델 사용
-model_name = "mobilenet_v2_light"
-```
+## Performance
 
----
+세 방식은 정확도-연산량-FPGA 구현 난이도 사이의 trade-off 관계에 있습니다.
 
-## 📖 참고 자료
+| 방식 | 상대 정확도 | 연산량 | FPGA 구현 | 노이즈 강건성 |
+|---|---|---|---|---|
+| Filter | 낮음 | 매우 낮음 | 용이 | 낮음 |
+| CNN | 높음 | 중간 | 보통 | 높음 |
+| YOLO | 중간 | 높음 | 어려움 | 높음 |
 
-### DVS 센서 관련
-- Dynamic Vision Sensor (DVS) 기술 개요
-- Event-based 비전 시스템
+검증된 정량 baseline(재현 확인된 CNN 2.62px 등)은 [BASELINE.md](BASELINE.md)에 정리돼 있습니다. 세 방식을 동일 split·지표로 묶는 정량 비교(wandb)는 Phase 2 작업입니다 ([research_plan.md](research_plan.md)).
 
-### 딥러닝 모델
-- MobileNetV2: Inverted Residuals and Linear Bottlenecks
-- YOLOv3: An Incremental Improvement
+## Dependencies
 
-### 신호 처리
-- Kalman Filter 이론
-- Spatial Clustering 알고리즘
-
----
-
-## 🤝 기여
-
-이 프로젝트는 졸업 연구의 일부입니다. 
-
-**연구 주제**: DVS 카메라를 이용한 레이저 빔 중심점 실시간 감지 및 FPGA 구현
-
-**연구 기간**: 2024-2025
-
----
-
-## 📄 라이선스
-
-이 프로젝트는 연구 목적으로만 사용됩니다.
-
----
-
-## 📧 문의
-
-프로젝트 관련 문의사항이나 개선 제안이 있으시면 언제든 연락 주세요!
-
-**프로젝트 저장소**: `/hai/home/jdj/dvs/sim/`
-
----
-
-## 🔄 업데이트 기록
-
-- **2025-01**: YOLO 방식 추가 및 성능 비교
-- **2024-12**: CNN Fixed GT 방식 도입 및 최적화
-- **2024-11**: Filter 기반 초기 시스템 구축
-
----
-
-**🎓 이 프로젝트는 DVS 센서를 활용한 실시간 레이저 추적 시스템 개발을 목표로 하는 졸업 연구입니다.**
-
+핵심 라이브러리: numpy, pytorch(+torchvision), scipy, pandas, matplotlib, scikit-learn, filterpy(Kalman filter용). 전체 목록은 `environment.yml`을 참고하세요.
